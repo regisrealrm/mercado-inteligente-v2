@@ -76,21 +76,6 @@ function nomeAtual(lista, id, nomeFallback) {
   return item ? item.nome : nomeFallback
 }
 
-// Pesos/variações já usados nesse produto em qualquer entrada registrada,
-// independente de "Controlar estoque" estar marcado ou não.
-function variantesDoHistorico(produtoId, movimentacoes) {
-  const mapa = new Map()
-  movimentacoes
-    .filter((m) => m.tipo === 'entrada' && m.produtoId === produtoId)
-    .forEach((m) => {
-      (m.itens || []).forEach((v) => {
-        const chave = `${v.peso}|${v.unidadePeso}`
-        if (!mapa.has(chave)) mapa.set(chave, { peso: v.peso, unidadePeso: v.unidadePeso })
-      })
-    })
-  return [...mapa.values()].sort((a, b) => a.peso - b.peso)
-}
-
 function comprasNormalizadas(compras) {
   return {
     desejado: !!compras?.desejado,
@@ -205,7 +190,21 @@ function useProdutos() {
     return produtos.find((p) => p.secaoId === secaoId && p.itemId === itemId && p.marcaId === marcaId)
   }
 
-  async function registrarEntradaNoProduto({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, linhas, local, controlarEstoque }) {
+  // Mescla os pesos já conhecidos do produto com os pesos digitados nessa entrada
+  // (mesmo os que ficaram sem unidade preenchida) — serve só pra sugerir depois,
+  // não afeta o estoque.
+  function mesclarPesosConhecidos(existentes, todasLinhas) {
+    const mapa = new Map((existentes || []).map((v) => [`${v.peso}|${v.unidadePeso}`, v]))
+    ;(todasLinhas || []).forEach((l) => {
+      if (l.peso > 0) {
+        const chave = `${l.peso}|${l.unidadePeso}`
+        if (!mapa.has(chave)) mapa.set(chave, { peso: l.peso, unidadePeso: l.unidadePeso })
+      }
+    })
+    return [...mapa.values()].sort((a, b) => a.peso - b.peso)
+  }
+
+  async function registrarEntradaNoProduto({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, linhas, todasLinhas, local, controlarEstoque }) {
     const semMovimento = linhas.length === 0
     const existente = encontrar({ secaoId, itemId, marcaId })
 
@@ -219,6 +218,7 @@ function useProdutos() {
       await updateDoc(doc(db, PRODUTOS_COLLECTION, existente.id), {
         controlarEstoque,
         estoquePorLocal,
+        pesosConhecidos: mesclarPesosConhecidos(existente.pesosConhecidos, todasLinhas),
         atualizadoEm: serverTimestamp()
       })
       return existente.id
@@ -232,6 +232,7 @@ function useProdutos() {
       secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome,
       controlarEstoque,
       estoquePorLocal: listaLocal.length > 0 ? { [local]: listaLocal } : {},
+      pesosConhecidos: mesclarPesosConhecidos([], todasLinhas),
       compras: { desejado: false, linhas: [] },
       foto: null,
       criadoEm: serverTimestamp(),
@@ -472,6 +473,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
       await onSalvar({
         secaoId, itemId, marcaId,
         linhas: linhasComMovimento,
+        todasLinhas: linhasNormalizadas,
         preco: preco === '' ? null : Number(preco),
         dataEntrada,
         local: localSel?.nome || '',
@@ -729,13 +731,30 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
   const [itemId, setItemId] = useState(produto.itemId || '')
   const [marcaId, setMarcaId] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaId || ''))
   const [controlarEstoque, setControlarEstoque] = useState(!!produto.controlarEstoque)
+  const [pesos, setPesos] = useState(produto.pesosConhecidos || [])
+  const [novoPeso, setNovoPeso] = useState('')
+  const [novaUnidadePeso, setNovaUnidadePeso] = useState('kg')
   const [salvando, setSalvando] = useState(false)
+
+  function adicionarPeso() {
+    const valor = Number(novoPeso)
+    if (!valor || valor <= 0) return
+    const jaExiste = pesos.some((p) => p.peso === valor && p.unidadePeso === novaUnidadePeso)
+    if (!jaExiste) {
+      setPesos((prev) => [...prev, { peso: valor, unidadePeso: novaUnidadePeso }].sort((a, b) => a.peso - b.peso))
+    }
+    setNovoPeso('')
+  }
+
+  function removerPeso(peso, unidadePeso) {
+    setPesos((prev) => prev.filter((p) => !(p.peso === peso && p.unidadePeso === unidadePeso)))
+  }
 
   async function confirmar() {
     if (!secaoId || !itemId || salvando) return
     setSalvando(true)
     try {
-      await onConfirmar({ secaoId, itemId, marcaId, controlarEstoque })
+      await onConfirmar({ secaoId, itemId, marcaId, controlarEstoque, pesosConhecidos: pesos })
     } finally {
       setSalvando(false)
     }
@@ -757,6 +776,37 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
             checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
           <span className="text-sm text-ink">Controlar estoque deste item</span>
         </label>
+
+        <div className="mb-4">
+          <label className="text-sm text-muted block mb-1">Pesos conhecidos</label>
+          <p className="text-[11px] text-muted mb-2">Aparecem como sugestão rápida na Lista de compras.</p>
+          {pesos.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {pesos.map((p) => (
+                <span key={`${p.peso}-${p.unidadePeso}`}
+                  className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-lg bg-accent-light text-accent-dark">
+                  {rotuloVariante(p)}
+                  <button type="button" onClick={() => removerPeso(p.peso, p.unidadePeso)} className="text-accent-dark/70">
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input type="number" step="0.01" value={novoPeso} onChange={(e) => setNovoPeso(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && adicionarPeso()}
+              placeholder="Peso" className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-base" />
+            <select value={novaUnidadePeso} onChange={(e) => setNovaUnidadePeso(e.target.value)}
+              className="w-16 px-1 py-2 rounded-xl border border-line bg-base text-sm">
+              {UNIDADES_PESO.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+            <button type="button" onClick={adicionarPeso}
+              className="w-11 h-11 shrink-0 rounded-xl bg-primary-light text-primary-dark flex items-center justify-center">
+              <Plus size={20} />
+            </button>
+          </div>
+        </div>
 
         <div className="flex gap-2 mb-3">
           <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
@@ -842,7 +892,8 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
       secaoId: dados.secaoId, secaoNome: secao?.nome || '',
       itemId: dados.itemId, itemNome: item?.nome || '',
       marcaId: dados.marcaId || 'sem-marca', marcaNome: marca?.nome || 'Sem marca',
-      controlarEstoque: dados.controlarEstoque
+      controlarEstoque: dados.controlarEstoque,
+      pesosConhecidos: dados.pesosConhecidos
     })
   }
 
@@ -991,7 +1042,7 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
 let chaveCompra = 1
 const novaChaveCompra = () => String(chaveCompra++)
 
-function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarComprador, movimentacoes }) {
+function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarComprador }) {
   const compras = comprasNormalizadas(produto.compras)
   const [linhas, setLinhas] = useState(() =>
     compras.linhas.length > 0
@@ -1000,7 +1051,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
   )
   const [compradorId, setCompradorId] = useState(() => compradores.find((c) => c.nome === compras.compradorNome)?.id || '')
   const [aberto, setAberto] = useState(false)
-  const variantes = variantesDoHistorico(produto.id, movimentacoes)
+  const variantes = produto.pesosConhecidos || []
 
   function salvar(patch) {
     const linhasFonte = patch.linhas || linhas
@@ -1356,8 +1407,7 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
         {visiveis.map((p) => (
           <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar}
             onAmpliarFoto={() => setFotoAmpliadaId(p.id)}
-            compradores={compradores} criarComprador={criarComprador}
-            movimentacoes={movimentacoes} />
+            compradores={compradores} criarComprador={criarComprador} />
         ))}
       </div>
 
@@ -1735,6 +1785,7 @@ export default function App() {
       itemId: dados.itemId, itemNome: item?.nome || '',
       marcaId: marcaIdUsado, marcaNome: marcaNomeUsado,
       linhas: dados.linhas,
+      todasLinhas: dados.todasLinhas,
       local: localUsado,
       controlarEstoque: dados.controlarEstoque
     })
