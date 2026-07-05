@@ -324,7 +324,7 @@ function useMovimentacoes() {
 // COMPONENTES
 // ============================================================
 
-function SelectWithQuickAdd({ label, valor, onChange, opcoes, onCriar }) {
+function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar }) {
   const [criando, setCriando] = useState(false)
   const [novoNome, setNovoNome] = useState('')
   const [erro, setErro] = useState('')
@@ -346,7 +346,7 @@ function SelectWithQuickAdd({ label, valor, onChange, opcoes, onCriar }) {
 
   return (
     <div className="mb-3">
-      <label className="text-sm text-muted">{label}</label>
+      <label className="text-sm text-muted">{label}{opcional && <span className="text-muted/70"> (opcional)</span>}</label>
       {!criando ? (
         <div className="flex gap-2 mt-1">
           <select
@@ -404,7 +404,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
   const [salvando, setSalvando] = useState(false)
   const [sucesso, setSucesso] = useState(false)
 
-  const valido = secaoId && itemId && marcaId
+  const valido = secaoId && itemId
 
   const linhasNormalizadas = linhas.map((l) => ({
     peso: l.peso === '' ? 0 : Number(l.peso),
@@ -446,7 +446,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
       <div className="card p-4">
         <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
         <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
-        <SelectWithQuickAdd label="Marca" valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
 
         <div className="mb-1 flex items-center justify-between">
           <label className="text-sm text-muted">Pesos e quantidades</label>
@@ -1398,11 +1398,13 @@ export default function App() {
     const item = itensHook.lista.find((i) => i.id === dados.itemId)
     const marca = marcasHook.lista.find((m) => m.id === dados.marcaId)
     const localUsado = dados.local || 'Sem local'
+    const marcaIdUsado = dados.marcaId || 'sem-marca'
+    const marcaNomeUsado = marca?.nome || 'Sem marca'
 
     const produtoId = await registrarEntradaNoProduto({
       secaoId: dados.secaoId, secaoNome: secao?.nome || '',
       itemId: dados.itemId, itemNome: item?.nome || '',
-      marcaId: dados.marcaId, marcaNome: marca?.nome || '',
+      marcaId: marcaIdUsado, marcaNome: marcaNomeUsado,
       linhas: dados.linhas,
       local: localUsado,
       controlarEstoque: dados.controlarEstoque
