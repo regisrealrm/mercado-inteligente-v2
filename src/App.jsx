@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
-  query, orderBy, serverTimestamp, limit as fbLimit
+  query, orderBy, serverTimestamp
 } from 'firebase/firestore'
 import { db } from './firebase.js'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
-  Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings,
-  Camera, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store, ChevronDown
+  Plus, Check, X, Pencil, Trash2, Package, ShoppingCart,
+  Camera, Loader2, Printer, Share2, Store
 } from 'lucide-react'
 
 // ============================================================
@@ -32,41 +32,6 @@ function formatarData(iso) {
 function rotuloVariante(v) {
   if (!v.peso || v.peso === 0) return 's/ peso'
   return `${v.peso} ${v.unidadePeso}`
-}
-
-// estoquePorLocal[local] = [{ peso, unidadePeso, unidades }]
-function somarVariante(lista, peso, unidadePeso, unidades) {
-  const idx = lista.findIndex((v) => v.peso === peso && v.unidadePeso === unidadePeso)
-  if (idx >= 0) {
-    const copia = [...lista]
-    copia[idx] = { ...copia[idx], unidades: copia[idx].unidades + unidades }
-    return copia
-  }
-  return [...lista, { peso, unidadePeso, unidades }]
-}
-
-function subtrairVariante(lista, peso, unidadePeso, unidades) {
-  return lista
-    .map((v) =>
-      v.peso === peso && v.unidadePeso === unidadePeso
-        ? { ...v, unidades: Math.max(0, v.unidades - unidades) }
-        : v
-    )
-    .filter((v) => v.unidades > 0)
-}
-
-function totalUnidadesProduto(produto) {
-  return Object.values(produto.estoquePorLocal || {}).reduce(
-    (acc, lista) => acc + lista.reduce((s, v) => s + v.unidades, 0),
-    0
-  )
-}
-
-function locaisComEstoque(produto) {
-  return Object.entries(produto.estoquePorLocal || {})
-    .map(([nome, variantes]) => ({ nome, variantes: (variantes || []).filter((v) => v.unidades > 0) }))
-    .filter((l) => l.variantes.length > 0)
-    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
 }
 
 // Busca o nome atual de uma seção/item/marca pelo id, com fallback pro nome
@@ -190,9 +155,8 @@ function useProdutos() {
     return produtos.find((p) => p.secaoId === secaoId && p.itemId === itemId && p.marcaId === marcaId)
   }
 
-  // Mescla os pesos já conhecidos do produto com os pesos digitados nessa entrada
-  // (mesmo os que ficaram sem unidade preenchida) — serve só pra sugerir depois,
-  // não afeta o estoque.
+  // Mescla os pesos já conhecidos do produto com os pesos digitados nesse cadastro
+  // — serve só pra sugerir depois na lista de compras.
   function mesclarPesosConhecidos(existentes, todasLinhas) {
     const mapa = new Map((existentes || []).map((v) => [`${v.peso}|${v.unidadePeso}`, v]))
     ;(todasLinhas || []).forEach((l) => {
@@ -204,34 +168,19 @@ function useProdutos() {
     return [...mapa.values()].sort((a, b) => a.peso - b.peso)
   }
 
-  async function registrarEntradaNoProduto({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, linhas, todasLinhas, local, controlarEstoque }) {
-    const semMovimento = linhas.length === 0
+  async function cadastrarProduto({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, todasLinhas }) {
     const existente = encontrar({ secaoId, itemId, marcaId })
 
     if (existente) {
-      let estoquePorLocal = existente.estoquePorLocal || {}
-      if (!semMovimento && controlarEstoque) {
-        let listaLocal = estoquePorLocal[local] || []
-        linhas.forEach((l) => { listaLocal = somarVariante(listaLocal, l.peso, l.unidadePeso, l.unidades) })
-        estoquePorLocal = { ...estoquePorLocal, [local]: listaLocal }
-      }
       await updateDoc(doc(db, PRODUTOS_COLLECTION, existente.id), {
-        controlarEstoque,
-        estoquePorLocal,
         pesosConhecidos: mesclarPesosConhecidos(existente.pesosConhecidos, todasLinhas),
         atualizadoEm: serverTimestamp()
       })
       return existente.id
     }
 
-    let listaLocal = []
-    if (!semMovimento && controlarEstoque) {
-      linhas.forEach((l) => { listaLocal = somarVariante(listaLocal, l.peso, l.unidadePeso, l.unidades) })
-    }
     const refDoc = await addDoc(collection(db, PRODUTOS_COLLECTION), {
       secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome,
-      controlarEstoque,
-      estoquePorLocal: listaLocal.length > 0 ? { [local]: listaLocal } : {},
       pesosConhecidos: mesclarPesosConhecidos([], todasLinhas),
       compras: { desejado: false, linhas: [] },
       foto: null,
@@ -239,59 +188,6 @@ function useProdutos() {
       atualizadoEm: serverTimestamp()
     })
     return refDoc.id
-  }
-
-  async function aplicarSaida(produto, { localOrigem, itens }) {
-    let listaLocal = produto.estoquePorLocal?.[localOrigem] || []
-    itens.forEach((v) => { listaLocal = subtrairVariante(listaLocal, v.peso, v.unidadePeso, v.unidades) })
-    return updateDoc(doc(db, PRODUTOS_COLLECTION, produto.id), {
-      estoquePorLocal: { ...produto.estoquePorLocal, [localOrigem]: listaLocal },
-      atualizadoEm: serverTimestamp()
-    })
-  }
-
-  async function aplicarTransferencia(produto, { localOrigem, localDestino, itens }) {
-    let listaOrigem = produto.estoquePorLocal?.[localOrigem] || []
-    let listaDestino = produto.estoquePorLocal?.[localDestino] || []
-    itens.forEach((v) => {
-      listaOrigem = subtrairVariante(listaOrigem, v.peso, v.unidadePeso, v.unidades)
-      listaDestino = somarVariante(listaDestino, v.peso, v.unidadePeso, v.unidades)
-    })
-    return updateDoc(doc(db, PRODUTOS_COLLECTION, produto.id), {
-      estoquePorLocal: { ...produto.estoquePorLocal, [localOrigem]: listaOrigem, [localDestino]: listaDestino },
-      atualizadoEm: serverTimestamp()
-    })
-  }
-
-  // Ajusta o estoque quando uma entrada já registrada é editada:
-  // remove a contribuição antiga (local/linhas de antes) e aplica a nova,
-  // considerando que "controlar estoque" também pode ter sido ligado/desligado.
-  async function ajustarEdicaoEntrada(produto, movAntiga, novosDados) {
-    let estoquePorLocal = produto.estoquePorLocal || {}
-    const controlavaAntes = produto.controlarEstoque
-    const vaiControlarDepois = novosDados.controlarEstoque
-
-    if (controlavaAntes) {
-      let listaAntiga = estoquePorLocal[movAntiga.local] || []
-      ;(movAntiga.itens || []).forEach((v) => {
-        listaAntiga = subtrairVariante(listaAntiga, v.peso, v.unidadePeso, v.unidades)
-      })
-      estoquePorLocal = { ...estoquePorLocal, [movAntiga.local]: listaAntiga }
-    }
-
-    if (vaiControlarDepois) {
-      let listaNova = estoquePorLocal[novosDados.local] || []
-      novosDados.linhas.forEach((l) => {
-        listaNova = somarVariante(listaNova, l.peso, l.unidadePeso, l.unidades)
-      })
-      estoquePorLocal = { ...estoquePorLocal, [novosDados.local]: listaNova }
-    }
-
-    return updateDoc(doc(db, PRODUTOS_COLLECTION, produto.id), {
-      controlarEstoque: vaiControlarDepois,
-      estoquePorLocal,
-      atualizadoEm: serverTimestamp()
-    })
   }
 
   async function atualizarCompras(produtoId, compras) {
@@ -327,44 +223,7 @@ function useProdutos() {
     })
   }
 
-  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro }
-}
-
-const MOVIMENTACOES_COLLECTION = 'movimentacoes'
-
-function useMovimentacoes() {
-  const [movimentacoes, setMovimentacoes] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const q = query(collection(db, MOVIMENTACOES_COLLECTION), orderBy('data', 'desc'), fbLimit(500))
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMovimentacoes(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })))
-      setLoading(false)
-    })
-    return () => unsubscribe()
-  }, [])
-
-  async function registrar(mov) {
-    return addDoc(collection(db, MOVIMENTACOES_COLLECTION), {
-      ...mov,
-      criadoEm: serverTimestamp()
-    })
-  }
-
-  async function atualizar(movId, dados) {
-    return updateDoc(doc(db, MOVIMENTACOES_COLLECTION, movId), {
-      ...dados,
-      atualizadoEm: serverTimestamp()
-    })
-  }
-
-  async function removerPorProduto(produtoId) {
-    const relacionadas = movimentacoes.filter((m) => m.produtoId === produtoId)
-    await Promise.all(relacionadas.map((m) => deleteDoc(doc(db, MOVIMENTACOES_COLLECTION, m.id))))
-  }
-
-  return { movimentacoes, loading, registrar, atualizar, removerPorProduto }
+  return { produtos, loading, cadastrarProduto, atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro }
 }
 
 // ============================================================
@@ -437,29 +296,17 @@ function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar 
 
 let chaveLinha = 1
 const novaChaveLinha = () => String(chaveLinha++)
-const linhaVazia = () => ({ key: novaChaveLinha(), peso: '', unidadePeso: 'kg', unidades: '' })
+const linhaVazia = () => ({ key: novaChaveLinha(), peso: '', unidadePeso: 'kg' })
 
-function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, criarMarca, criarLocal, onSalvar }) {
+function EntradaForm({ secoesHook, itensHook, marcasHook, onSalvar, onAbrirEditarCategorias }) {
   const [secaoId, setSecaoId] = useState('')
   const [itemId, setItemId] = useState('')
   const [marcaId, setMarcaId] = useState('')
   const [linhas, setLinhas] = useState([linhaVazia()])
-  const [preco, setPreco] = useState('')
-  const [dataEntrada, setDataEntrada] = useState(hojeISO())
-  const [localId, setLocalId] = useState('')
-  const [controlarEstoque, setControlarEstoque] = useState(true)
   const [salvando, setSalvando] = useState(false)
   const [sucesso, setSucesso] = useState(false)
 
   const valido = secaoId && itemId
-
-  const linhasNormalizadas = linhas.map((l) => ({
-    peso: l.peso === '' ? 0 : Number(l.peso),
-    unidadePeso: l.unidadePeso,
-    unidades: l.unidades === '' ? 0 : Number(l.unidades)
-  }))
-  const linhasComMovimento = linhasNormalizadas.filter((l) => l.unidades > 0)
-  const semMovimento = linhasComMovimento.length === 0
 
   function atualizarLinha(key, campo, valor) {
     setLinhas((prev) => prev.map((l) => (l.key === key ? { ...l, [campo]: valor } : l)))
@@ -469,18 +316,14 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
     if (!valido || salvando) return
     setSalvando(true)
     try {
-      const localSel = locais.find((l) => l.id === localId)
-      await onSalvar({
-        secaoId, itemId, marcaId,
-        linhas: linhasComMovimento,
-        todasLinhas: linhasNormalizadas,
-        preco: preco === '' ? null : Number(preco),
-        dataEntrada,
-        local: localSel?.nome || '',
-        controlarEstoque
-      })
+      const todasLinhas = linhas
+        .map((l) => ({ peso: l.peso === '' ? 0 : Number(l.peso), unidadePeso: l.unidadePeso }))
+        .filter((l) => l.peso > 0)
+      await onSalvar({ secaoId, itemId, marcaId, todasLinhas })
+      setSecaoId('')
+      setItemId('')
+      setMarcaId('')
       setLinhas([linhaVazia()])
-      setPreco('')
       setSucesso(true)
       setTimeout(() => setSucesso(false), 1600)
     } finally {
@@ -491,12 +334,20 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
   return (
     <div className="px-4 pb-2">
       <div className="card p-4">
-        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
-        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
-        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-ink">Dados do produto</span>
+          <button type="button" onClick={onAbrirEditarCategorias}
+            className="flex items-center gap-1 text-xs font-medium text-muted" aria-label="Editar seção, item e marca">
+            <Pencil size={12} /> Editar listas
+          </button>
+        </div>
+
+        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoesHook.lista} onCriar={secoesHook.adicionar} />
+        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itensHook.lista} onCriar={itensHook.adicionar} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcasHook.lista} onCriar={marcasHook.adicionar} />
 
         <div className="mb-1 flex items-center justify-between">
-          <label className="text-sm text-muted">Pesos e quantidades</label>
+          <label className="text-sm text-muted">Pesos (opcional)</label>
           <button type="button" onClick={() => setLinhas((prev) => [...prev, linhaVazia()])}
             className="text-xs font-medium text-primary-dark bg-primary-light px-2.5 py-1 rounded-lg flex items-center gap-1">
             <Plus size={13} /> Adicionar peso
@@ -512,9 +363,6 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
               value={l.unidadePeso} onChange={(e) => atualizarLinha(l.key, 'unidadePeso', e.target.value)}>
               {UNIDADES_PESO.map((u) => <option key={u} value={u}>{u}</option>)}
             </select>
-            <input type="number"
-              className="w-20 px-3 py-2 rounded-xl border border-line bg-base"
-              value={l.unidades} onChange={(e) => atualizarLinha(l.key, 'unidades', e.target.value)} placeholder="Un" />
             {linhas.length > 1 && (
               <button type="button" onClick={() => setLinhas((prev) => prev.filter((x) => x.key !== l.key))}
                 className="text-danger p-1 shrink-0">
@@ -524,40 +372,13 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
           </div>
         ))}
         <p className="text-[11px] text-muted mb-3">
-          Ex: 500 ml × 5 un e 1 L × 2 un do mesmo produto — cada peso vira uma variação no estoque.
+          Os pesos aparecem depois como sugestão rápida na Lista de compras.
         </p>
-
-        <div className="mb-3">
-          <label className="text-sm text-muted">Preço pago (R$) — opcional</label>
-          <input type="number" step="0.01"
-            className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
-            value={preco} onChange={(e) => setPreco(e.target.value)} placeholder="0,00" />
-        </div>
-
-        <div className="mb-3">
-          <label className="text-sm text-muted">Data da entrada</label>
-          <input type="date" className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
-            value={dataEntrada} onChange={(e) => setDataEntrada(e.target.value)} />
-        </div>
-
-        <SelectWithQuickAdd label="Local" valor={localId} onChange={setLocalId} opcoes={locais} onCriar={criarLocal} />
-
-        <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
-          <input type="checkbox" className="w-5 h-5 rounded accent-primary"
-            checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
-          <span className="text-sm text-ink">Controlar estoque deste item</span>
-        </label>
 
         <button disabled={!valido || salvando} onClick={salvar}
           className="btn-primary w-full disabled:opacity-40">
-          {salvando ? 'Salvando...' : sucesso ? 'Salvo ✓' : semMovimento ? 'Cadastrar item (sem entrada)' : 'Registrar entrada'}
+          {salvando ? 'Salvando...' : sucesso ? 'Salvo ✓' : 'Cadastrar item'}
         </button>
-
-        {semMovimento && (
-          <p className="text-xs text-muted mt-2 text-center">
-            Sem unidades preenchidas: só cadastra o item no catálogo, sem mexer no estoque nem no histórico. Peso sozinho, sem unidades, não conta como entrada.
-          </p>
-        )}
       </div>
     </div>
   )
@@ -569,7 +390,7 @@ function EntradaModal({ onFechar, ...propsEntrada }) {
       <div className="bg-base w-full max-w-md md:max-w-lg rounded-t-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="w-10 h-1 bg-line rounded-full mx-auto mt-3" />
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
-          <h2 className="text-lg font-display font-semibold text-ink">Nova entrada</h2>
+          <h2 className="text-lg font-display font-semibold text-ink">Cadastrar item</h2>
           <button onClick={onFechar} className="text-muted p-1" aria-label="Fechar">
             <X size={20} />
           </button>
@@ -646,107 +467,10 @@ function FotoAmpliadaModal({ produto, onFechar, onTrocarFoto, onRemoverFoto, car
   )
 }
 
-function MovimentacaoModal({ produto, tipo, locais, criarLocal, onConfirmar, onFechar }) {
-  const origens = locaisComEstoque(produto)
-  const [localOrigem, setLocalOrigem] = useState(origens[0]?.nome || '')
-  const [localDestinoId, setLocalDestinoId] = useState('')
-  const [retiradas, setRetiradas] = useState({})
-  const [data, setData] = useState(hojeISO())
-  const [salvando, setSalvando] = useState(false)
-
-  const ehTransferencia = tipo === 'transferencia'
-  const variantesOrigem = origens.find((l) => l.nome === localOrigem)?.variantes || []
-
-  const chaveDe = (v) => `${v.peso}|${v.unidadePeso}`
-  const getRetirada = (v) => retiradas[chaveDe(v)] ?? ''
-
-  const itensMovimento = variantesOrigem
-    .map((v) => ({
-      peso: v.peso,
-      unidadePeso: v.unidadePeso,
-      unidades: getRetirada(v) === '' ? 0 : Math.min(Number(getRetirada(v)), v.unidades)
-    }))
-    .filter((v) => v.unidades > 0)
-
-  const destinoSel = locais.find((l) => l.id === localDestinoId)
-  const podeConfirmar = itensMovimento.length > 0 && localOrigem &&
-    (!ehTransferencia || (destinoSel && destinoSel.nome !== localOrigem))
-
-  async function confirmar() {
-    if (!podeConfirmar || salvando) return
-    setSalvando(true)
-    try {
-      await onConfirmar({
-        produtoId: produto.id,
-        localOrigem,
-        localDestino: ehTransferencia ? destinoSel.nome : null,
-        itens: itensMovimento,
-        data
-      })
-    } finally {
-      setSalvando(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
-      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
-        <h2 className="text-lg font-semibold mb-1">{ehTransferencia ? 'Transferir entre locais' : 'Dar saída'}</h2>
-        <p className="text-sm text-muted mb-4">{produto.itemNome} — {produto.marcaNome}</p>
-
-        <label className="text-sm text-muted">{ehTransferencia ? 'De' : 'Local'}</label>
-        <select className="w-full mt-1 mb-3 px-3 py-2 rounded-xl border border-line bg-base"
-          value={localOrigem} onChange={(e) => { setLocalOrigem(e.target.value); setRetiradas({}) }}>
-          {origens.map((l) => <option key={l.nome} value={l.nome}>{l.nome}</option>)}
-        </select>
-
-        {ehTransferencia && (
-          <SelectWithQuickAdd label="Para" valor={localDestinoId} onChange={setLocalDestinoId}
-            opcoes={locais.filter((l) => l.nome !== localOrigem)} onCriar={criarLocal} />
-        )}
-
-        <label className="text-sm text-muted block mb-1">
-          {ehTransferencia ? 'Quanto mover de cada peso' : 'Quanto retirar de cada peso'}
-        </label>
-        <div className="flex flex-col gap-2 mb-4">
-          {variantesOrigem.length === 0 && <p className="text-sm text-muted">Nenhum estoque neste local.</p>}
-          {variantesOrigem.map((v) => (
-            <div key={chaveDe(v)} className="flex items-center gap-3 bg-base rounded-xl border border-line px-3 py-2">
-              <div className="flex-1">
-                <span className="font-medium text-ink">{rotuloVariante(v)}</span>
-                <span className="ml-2 text-sm font-semibold text-primary-dark">tem {v.unidades} un</span>
-              </div>
-              <input type="number" min="0" max={v.unidades}
-                className="w-20 px-3 py-1.5 rounded-lg border border-line bg-surface text-center"
-                value={getRetirada(v)}
-                onChange={(e) => setRetiradas((prev) => ({ ...prev, [chaveDe(v)]: e.target.value }))}
-                placeholder="0" />
-            </div>
-          ))}
-        </div>
-
-        <label className="text-sm text-muted">Data</label>
-        <input type="date" className="w-full mt-1 mb-4 px-3 py-2 rounded-xl border border-line bg-base"
-          value={data} onChange={(e) => setData(e.target.value)} />
-
-        <div className="flex gap-2">
-          <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
-          <button disabled={!podeConfirmar || salvando} onClick={confirmar}
-            className={'flex-1 rounded-xl px-4 py-2.5 font-medium text-white disabled:opacity-40 ' + (ehTransferencia ? 'bg-warn' : 'bg-danger')}>
-            {salvando ? 'Salvando...' : ehTransferencia ? 'Confirmar transferência' : 'Confirmar saída'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, temEntradaRecente, onAbrirEdicaoEntrada, onConfirmar, onFechar }) {
+function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, onConfirmar, onFechar }) {
   const [secaoId, setSecaoId] = useState(produto.secaoId || '')
   const [itemId, setItemId] = useState(produto.itemId || '')
   const [marcaId, setMarcaId] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaId || ''))
-  const [controlarEstoque, setControlarEstoque] = useState(!!produto.controlarEstoque)
   const [pesos, setPesos] = useState(produto.pesosConhecidos || [])
   const [novoPeso, setNovoPeso] = useState('')
   const [novaUnidadePeso, setNovaUnidadePeso] = useState('kg')
@@ -770,7 +494,7 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
     if (!secaoId || !itemId || salvando) return
     setSalvando(true)
     try {
-      await onConfirmar({ secaoId, itemId, marcaId, controlarEstoque, pesosConhecidos: pesos })
+      await onConfirmar({ secaoId, itemId, marcaId, pesosConhecidos: pesos })
     } finally {
       setSalvando(false)
     }
@@ -786,12 +510,6 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
         <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
         <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
         <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
-
-        <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
-          <input type="checkbox" className="w-5 h-5 rounded accent-primary"
-            checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
-          <span className="text-sm text-ink">Controlar estoque deste item</span>
-        </label>
 
         <div className="mb-4">
           <label className="text-sm text-muted block mb-1">Pesos conhecidos</label>
@@ -824,25 +542,18 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
           </div>
         </div>
 
-        <div className="flex gap-2 mb-3">
+        <div className="flex gap-2">
           <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
           <button disabled={!secaoId || !itemId || salvando} onClick={confirmar} className="btn-primary flex-1 disabled:opacity-40">
             {salvando ? 'Salvando...' : 'Salvar'}
           </button>
         </div>
-
-        {temEntradaRecente && (
-          <button type="button" onClick={onAbrirEdicaoEntrada}
-            className="w-full text-center text-xs font-medium text-primary-dark underline underline-offset-2">
-            Editar também peso, local, data e preço da última entrada
-          </button>
-        )}
       </div>
     </div>
   )
 }
 
-function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar }) {
+function ConfirmarExclusaoModal({ produto, onConfirmar, onFechar }) {
   const [excluindo, setExcluindo] = useState(false)
   if (!produto) return null
 
@@ -857,15 +568,13 @@ function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar 
         <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
         <h2 className="text-lg font-semibold mb-1 text-danger">Excluir produto</h2>
         <p className="text-sm text-muted mb-4">
-          {produto.itemNome} — {produto.marcaNome}. Isso remove o produto do catálogo
-          {qtdMovimentos > 0 ? ` e apaga ${qtdMovimentos} registro${qtdMovimentos > 1 ? 's' : ''} de entrada/saída/transferência dele` : ''}.
-          Não tem como desfazer.
+          {produto.itemNome} — {produto.marcaNome}. Isso remove o produto do catálogo. Não tem como desfazer.
         </p>
         <div className="flex gap-2">
           <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
           <button disabled={excluindo} onClick={confirmar}
             className="flex-1 rounded-xl px-4 py-2.5 font-medium text-white bg-danger disabled:opacity-50">
-            {excluindo ? 'Excluindo...' : 'Excluir tudo'}
+            {excluindo ? 'Excluindo...' : 'Excluir'}
           </button>
         </div>
       </div>
@@ -873,7 +582,7 @@ function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar 
   )
 }
 
-function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, criarSecao, criarItem, criarMarca, movimentacoes, onEditarEntrada, onEditarProduto, onExcluirProduto, onSalvarEntrada }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, onEditarProduto, onExcluirProduto, onSalvarEntrada, onAbrirEditarCategorias }) {
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -883,23 +592,11 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
 
   const [carregandoId, setCarregandoId] = useState(null)
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
-  const [modal, setModal] = useState(null)
-  const [editandoEntrada, setEditandoEntrada] = useState(null)
   const [editandoProduto, setEditandoProduto] = useState(null)
   const [excluindoProduto, setExcluindoProduto] = useState(null)
   const [mostrandoEntrada, setMostrandoEntrada] = useState(false)
 
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
-
-  function ultimaEntrada(produtoId) {
-    return movimentacoes
-      .filter((m) => m.tipo === 'entrada' && m.produtoId === produtoId)
-      .sort((a, b) => (b.data || '').localeCompare(a.data || ''))[0] || null
-  }
-
-  function contarMovimentos(produtoId) {
-    return movimentacoes.filter((m) => m.produtoId === produtoId).length
-  }
 
   async function handleEditarProduto(produtoId, dados) {
     const secao = secoes.find((s) => s.id === dados.secaoId)
@@ -909,7 +606,6 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
       secaoId: dados.secaoId, secaoNome: secao?.nome || '',
       itemId: dados.itemId, itemNome: item?.nome || '',
       marcaId: dados.marcaId || 'sem-marca', marcaNome: marca?.nome || 'Sem marca',
-      controlarEstoque: dados.controlarEstoque,
       pesosConhecidos: dados.pesosConhecidos
     })
   }
@@ -941,106 +637,48 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
       {produtos.length === 0 && (
         <div className="card p-6 text-center">
           <p className="text-ink font-medium mb-1">Nenhum produto cadastrado ainda</p>
-          <p className="text-sm text-muted">Produtos aparecem aqui automaticamente após a primeira entrada.</p>
+          <p className="text-sm text-muted">Toque em "Entrada" pra cadastrar o primeiro item.</p>
         </div>
       )}
       <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
-        {produtos.map((p) => {
-          const totalUn = totalUnidadesProduto(p)
-          const porLocal = locaisComEstoque(p)
-          const temEstoque = totalUn > 0
-          const entradaRecente = ultimaEntrada(p.id)
-          return (
-            <div key={p.id} className="card card-accent p-2.5" style={{ '--accent-stripe': temEstoque ? '#2F8145' : '#D6472A' }}>
-              <div className="flex items-center gap-2.5">
-                <FotoThumb produto={p} onEscolherArquivo={handleEscolherArquivo} onAmpliar={(produto) => setFotoAmpliadaId(produto.id)} carregando={carregandoId === p.id} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-1.5 flex-wrap">
-                    <span className="font-medium text-ink text-[13.5px] truncate">{p.itemNome}</span>
-                    <span className="text-muted text-xs truncate">— {p.marcaNome}</span>
-                  </div>
-                  <span className="tag-feira text-primary-dark mt-1">{p.secaoNome}</span>
+        {produtos.map((p) => (
+          <div key={p.id} className="card p-2.5">
+            <div className="flex items-center gap-2.5">
+              <FotoThumb produto={p} onEscolherArquivo={handleEscolherArquivo} onAmpliar={(produto) => setFotoAmpliadaId(produto.id)} carregando={carregandoId === p.id} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-medium text-ink text-[13.5px] truncate">{p.itemNome}</span>
+                  <span className="text-muted text-xs truncate">— {p.marcaNome}</span>
                 </div>
-                <div className="text-right shrink-0 pl-1">
-                  <div className="font-mono font-bold text-primary-dark leading-none text-[15px]">{totalUn}</div>
-                  <div className="text-[9px] text-muted uppercase tracking-wide">un total</div>
-                </div>
-              </div>
-
-              {porLocal.length > 0 && (
-                <div className="flex flex-col gap-0.5 mt-2 pl-[46px]">
-                  {porLocal.map((l) => (
-                    <div key={l.nome} className="text-[10.5px] text-muted truncate">
-                      <span className="font-medium text-ink">{l.nome}:</span>{' '}
-                      {l.variantes.map((v) => `${rotuloVariante(v)} ×${v.unidades}`).join('  ·  ')}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex gap-1.5 mt-2 pl-[46px]">
-                <button disabled={!temEstoque} onClick={() => setModal({ tipo: 'saida', produto: p })}
-                  className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-danger-light text-danger disabled:opacity-40">
-                  <LogOut size={12} /> Saída
-                </button>
-                <button disabled={!temEstoque} onClick={() => setModal({ tipo: 'transferencia', produto: p })}
-                  className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-warn-light text-warn disabled:opacity-40">
-                  <ArrowLeftRight size={12} /> Transferir
-                </button>
-                <button onClick={() => setEditandoProduto(p)}
-                  title="Editar cadastro" aria-label="Editar cadastro"
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
-                  <Pencil size={12} />
-                </button>
-                <button onClick={() => setExcluindoProduto(p)}
-                  title="Excluir produto" aria-label="Excluir produto"
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-danger-light text-danger">
-                  <Trash2 size={12} />
-                </button>
+                <span className="tag-feira text-primary-dark mt-1">{p.secaoNome}</span>
               </div>
             </div>
-          )
-        })}
+
+            <div className="flex gap-1.5 mt-2 pl-[46px]">
+              <button onClick={() => setEditandoProduto(p)}
+                title="Editar cadastro" aria-label="Editar cadastro"
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
+                <Pencil size={12} />
+              </button>
+              <button onClick={() => setExcluindoProduto(p)}
+                title="Excluir produto" aria-label="Excluir produto"
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-danger-light text-danger">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       <FotoAmpliadaModal produto={produtoAmpliado} onFechar={() => setFotoAmpliadaId(null)}
         onTrocarFoto={handleEscolherArquivo} onRemoverFoto={handleRemoverFoto}
         carregando={carregandoId === fotoAmpliadaId} />
 
-      {modal && (
-        <MovimentacaoModal produto={modal.produto} tipo={modal.tipo} locais={locais} criarLocal={criarLocal}
-          onFechar={() => setModal(null)}
-          onConfirmar={async (dados) => {
-            if (modal.tipo === 'saida') await onSaida(dados)
-            else await onTransferencia(dados)
-            setModal(null)
-          }} />
-      )}
-
-      {editandoEntrada && (
-        <EditarEntradaModal
-          movimentacao={editandoEntrada.movimentacao}
-          produto={editandoEntrada.produto}
-          locais={locais}
-          criarLocal={criarLocal}
-          onFechar={() => setEditandoEntrada(null)}
-          onConfirmar={async (dados) => {
-            await onEditarEntrada(editandoEntrada.movimentacao, dados)
-            setEditandoEntrada(null)
-          }} />
-      )}
-
       {editandoProduto && (
         <EditarProdutoModal
           produto={editandoProduto}
           secoes={secoes} itens={itens} marcas={marcas}
           criarSecao={criarSecao} criarItem={criarItem} criarMarca={criarMarca}
-          temEntradaRecente={!!ultimaEntrada(editandoProduto.id)}
-          onAbrirEdicaoEntrada={() => {
-            const mov = ultimaEntrada(editandoProduto.id)
-            setEditandoEntrada({ movimentacao: mov, produto: editandoProduto })
-            setEditandoProduto(null)
-          }}
           onFechar={() => setEditandoProduto(null)}
           onConfirmar={async (dados) => {
             await handleEditarProduto(editandoProduto.id, dados)
@@ -1051,7 +689,6 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
       {excluindoProduto && (
         <ConfirmarExclusaoModal
           produto={excluindoProduto}
-          qtdMovimentos={contarMovimentos(excluindoProduto.id)}
           onFechar={() => setExcluindoProduto(null)}
           onConfirmar={async () => {
             await onExcluirProduto(excluindoProduto.id)
@@ -1062,8 +699,10 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
       {mostrandoEntrada && (
         <EntradaModal
           onFechar={() => setMostrandoEntrada(false)}
-          secoes={secoes} itens={itens} marcas={marcas} locais={locais}
-          criarSecao={criarSecao} criarItem={criarItem} criarMarca={criarMarca} criarLocal={criarLocal}
+          secoesHook={{ lista: secoes, adicionar: criarSecao }}
+          itensHook={{ lista: itens, adicionar: criarItem }}
+          marcasHook={{ lista: marcas, adicionar: criarMarca }}
+          onAbrirEditarCategorias={onAbrirEditarCategorias}
           onSalvar={onSalvarEntrada} />
       )}
     </div>
@@ -1103,7 +742,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
 
   function alternarDesejado() {
     const novoDesejado = !compras.desejado
-    salvar({ desejado: novoDesejado })
+    salvar({ desejado: novoDesejado, comprado: novoDesejado ? false : compras.comprado })
     setAberto(novoDesejado)
   }
 
@@ -1145,7 +784,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
   const resumoQuantidade = linhasQuantidadeFormatadas(compras.linhas).join(' · ')
 
   return (
-    <div className={'card p-2.5 ' + (compras.comprado ? 'opacity-55' : compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
+    <div className={'card p-2.5 ' + (compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
       <div className="flex items-center gap-2.5">
         <input type="checkbox" className="w-4.5 h-4.5 rounded accent-primary shrink-0"
           checked={compras.desejado} onChange={alternarDesejado} />
@@ -1159,7 +798,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 flex-wrap">
-            <span className={'font-medium text-ink text-[13.5px] truncate ' + (compras.comprado ? 'line-through' : '')}>{produto.itemNome}</span>
+            <span className="font-medium text-ink text-[13.5px] truncate">{produto.itemNome}</span>
             <span className="text-muted text-xs truncate">— {produto.marcaNome}</span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
@@ -1173,9 +812,9 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
         <div className="mt-2 pl-[42px] flex items-center justify-between gap-2">
           <span className="text-xs text-muted truncate">{resumoQuantidade || 'Sem quantidade definida'}</span>
           <div className="flex items-center gap-2 shrink-0">
-            <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
-              className={'flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
-              <Check size={11} /> {compras.comprado ? 'Comprado' : 'Comprei'}
+            <button type="button" onClick={() => salvar({ comprado: true, desejado: false })}
+              className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-primary text-white">
+              <Check size={11} /> Comprei
             </button>
             <button type="button" onClick={() => setAberto(true)} className="text-muted p-1" aria-label="Editar quantidade">
               <Pencil size={13} />
@@ -1230,9 +869,9 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
           <SelectWithQuickAdd label="Comprador" opcional valor={compradorId} onChange={escolherComprador} opcoes={compradores} onCriar={criarComprador} />
 
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
-              className={'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
-              <Check size={13} /> {compras.comprado ? 'Comprado ✓' : 'Comprei'}
+            <button type="button" onClick={() => salvar({ comprado: true, desejado: false })}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-primary text-white">
+              <Check size={13} /> Comprei
             </button>
             <button type="button" onClick={() => setAberto(false)}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-ink text-white">
@@ -1314,11 +953,14 @@ async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
   window.open('https://wa.me/?text=' + encodeURIComponent(textoWhats), '_blank', 'noopener,noreferrer')
 }
 
-function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, itens, marcas, compradores, criarComprador, movimentacoes }) {
+function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, itens, marcas, compradoresHook }) {
+  const compradores = compradoresHook.lista
+  const criarComprador = compradoresHook.adicionar
   const [filtro, setFiltro] = useState('todos')
   const [filtroSecao, setFiltroSecao] = useState('todas')
   const [filtroComprador, setFiltroComprador] = useState('todos')
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
+  const [gerenciandoCompradores, setGerenciandoCompradores] = useState(false)
 
   // Sempre resolve o nome atual da seção/item/marca pelo id, em vez do texto
   // que ficou salvo na hora da entrada — assim renomear em Ajustes reflete aqui.
@@ -1395,14 +1037,30 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
           </select>
         )}
         {compradores.length > 0 && (
-          <select value={filtroComprador} onChange={(e) => setFiltroComprador(e.target.value)}
-            className="w-full px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
-            <option value="todos">Todos os compradores</option>
-            <option value="sem">Sem comprador</option>
-            {compradores.map((c) => (
-              <option key={c.id} value={c.nome}>{c.nome}</option>
-            ))}
-          </select>
+          <div className="flex gap-2">
+            <select value={filtroComprador} onChange={(e) => setFiltroComprador(e.target.value)}
+              className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
+              <option value="todos">Todos os compradores</option>
+              <option value="sem">Sem comprador</option>
+              {compradores.map((c) => (
+                <option key={c.id} value={c.nome}>{c.nome}</option>
+              ))}
+            </select>
+            <button onClick={() => setGerenciandoCompradores(true)}
+              className="w-10 h-10 shrink-0 rounded-xl bg-primary-light text-primary-dark flex items-center justify-center" aria-label="Adicionar comprador">
+              <Plus size={18} />
+            </button>
+            <button onClick={() => setGerenciandoCompradores(true)}
+              className="w-10 h-10 shrink-0 rounded-xl bg-base border border-line text-muted flex items-center justify-center" aria-label="Editar compradores">
+              <Pencil size={16} />
+            </button>
+          </div>
+        )}
+        {compradores.length === 0 && (
+          <button onClick={() => setGerenciandoCompradores(true)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary-light text-primary-dark self-start">
+            <Plus size={16} /> Cadastrar comprador
+          </button>
         )}
       </div>
 
@@ -1443,12 +1101,15 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
       </div>
 
       <FotoAmpliadaModal produto={produtoAmpliado} onFechar={() => setFotoAmpliadaId(null)} />
+
+      {gerenciandoCompradores && (
+        <EditarCompradoresModal compradoresHook={compradoresHook} onFechar={() => setGerenciandoCompradores(false)} />
+      )}
     </div>
   )
 }
 
-function GerenciadorLista({ titulo, placeholder, lista, adicionar, renomear, remover }) {
-  const [aberto, setAberto] = useState(false)
+function ListaEditavelInline({ titulo, placeholder, lista, adicionar, renomear, remover }) {
   const [novoNome, setNovoNome] = useState('')
   const [erro, setErro] = useState('')
   const [editandoId, setEditandoId] = useState(null)
@@ -1478,71 +1139,73 @@ function GerenciadorLista({ titulo, placeholder, lista, adicionar, renomear, rem
   }
 
   return (
-    <div className="card p-4 mb-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-medium text-ink">{titulo} <span className="text-muted font-normal text-sm">({lista.length})</span></h3>
-        <button onClick={() => setAberto((v) => !v)} className="text-muted p-1" aria-label={aberto ? 'Recolher lista' : 'Expandir lista'}>
-          <ChevronDown size={18} className={'transition-transform ' + (aberto ? 'rotate-180' : '')} />
-        </button>
-      </div>
+    <div className="mb-4">
+      <h3 className="font-medium text-ink mb-2 text-sm">{titulo} <span className="text-muted font-normal">({lista.length})</span></h3>
       <div className="flex gap-2">
-        <input className="flex-1 px-3 py-2 rounded-xl border bg-base"
+        <input className="flex-1 px-3 py-2 rounded-xl border bg-base text-sm"
           style={{ borderColor: erro ? '#D6472A' : undefined }}
           value={novoNome} onChange={(e) => { setNovoNome(e.target.value); setErro('') }}
           placeholder={placeholder}
           onKeyDown={(e) => e.key === 'Enter' && handleAdicionar()} />
-        <button onClick={handleAdicionar} className="btn-primary px-4">Add</button>
+        <button onClick={handleAdicionar} className="btn-primary px-3 text-sm">Add</button>
       </div>
       {erro && <p className="text-xs text-danger mt-1.5">{erro}</p>}
-
-      {aberto && (
-        <div className="flex flex-col gap-1.5 mt-3">
-          {lista.map((item) => (
-            <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-line last:border-0">
-              {editandoId === item.id ? (
-                <>
-                  <input autoFocus className="flex-1 px-2 py-1 rounded-lg border border-primary bg-base text-sm"
-                    value={nomeEdicao} onChange={(e) => setNomeEdicao(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && confirmarEdicao()} />
-                  <button onClick={confirmarEdicao} className="text-primary-dark text-sm font-medium px-2">Salvar</button>
-                </>
-              ) : (
-                <>
-                  <span className="flex-1 text-sm text-ink">{item.nome}</span>
-                  <button onClick={() => iniciarEdicao(item)} className="text-muted p-1.5"><Pencil size={15} /></button>
-                  <button onClick={() => remover(item.id)} className="text-danger p-1.5"><Trash2 size={15} /></button>
-                </>
-              )}
-            </div>
-          ))}
-          {lista.length === 0 && <p className="text-sm text-muted py-2">Nenhuma ainda.</p>}
-        </div>
-      )}
+      <div className="flex flex-col gap-1 mt-2">
+        {lista.map((item) => (
+          <div key={item.id} className="flex items-center gap-2 py-1 border-b border-line last:border-0">
+            {editandoId === item.id ? (
+              <>
+                <input autoFocus className="flex-1 px-2 py-1 rounded-lg border border-primary bg-base text-sm"
+                  value={nomeEdicao} onChange={(e) => setNomeEdicao(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && confirmarEdicao()} />
+                <button onClick={confirmarEdicao} className="text-primary-dark text-sm font-medium px-2">Salvar</button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1 text-sm text-ink">{item.nome}</span>
+                <button onClick={() => iniciarEdicao(item)} className="text-muted p-1"><Pencil size={14} /></button>
+                <button onClick={() => remover(item.id)} className="text-danger p-1"><Trash2 size={14} /></button>
+              </>
+            )}
+          </div>
+        ))}
+        {lista.length === 0 && <p className="text-xs text-muted py-1">Nenhuma ainda.</p>}
+      </div>
     </div>
   )
 }
 
-function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook, compradoresHook }) {
+function EditarCategoriasModal({ secoesHook, itensHook, marcasHook, onFechar }) {
   return (
-    <div className="px-4 pt-4 pb-28">
-      <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Ajustes</h2>
-      <p className="text-sm text-muted mb-4">Gerencie aqui as opções que aparecem no Controle de entrada.</p>
-      <GerenciadorLista titulo="Seção" placeholder="nome da seção" lista={secoesHook.lista} adicionar={secoesHook.adicionar} renomear={secoesHook.renomear} remover={secoesHook.remover} />
-      <GerenciadorLista titulo="Item" placeholder="nome do item" lista={itensHook.lista} adicionar={itensHook.adicionar} renomear={itensHook.renomear} remover={itensHook.remover} />
-      <GerenciadorLista titulo="Marca" placeholder="nome da marca" lista={marcasHook.lista} adicionar={marcasHook.adicionar} renomear={marcasHook.renomear} remover={marcasHook.remover} />
-      <GerenciadorLista titulo="Local" placeholder="nome do local" lista={locaisHook.lista} adicionar={locaisHook.adicionar} renomear={locaisHook.renomear} remover={locaisHook.remover} />
-      <GerenciadorLista titulo="Comprador" placeholder="nome do comprador" lista={compradoresHook.lista} adicionar={compradoresHook.adicionar} renomear={compradoresHook.renomear} remover={compradoresHook.remover} />
-      <p className="text-xs text-muted -mt-2">
-        Renomear ou excluir um local aqui não altera o estoque já registrado nele.
-      </p>
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <h2 className="text-lg font-semibold mb-3">Editar seção, item e marca</h2>
+        <ListaEditavelInline titulo="Seção" placeholder="nome da seção" lista={secoesHook.lista} adicionar={secoesHook.adicionar} renomear={secoesHook.renomear} remover={secoesHook.remover} />
+        <ListaEditavelInline titulo="Item" placeholder="nome do item" lista={itensHook.lista} adicionar={itensHook.adicionar} renomear={itensHook.renomear} remover={itensHook.remover} />
+        <ListaEditavelInline titulo="Marca" placeholder="nome da marca" lista={marcasHook.lista} adicionar={marcasHook.adicionar} renomear={marcasHook.renomear} remover={marcasHook.remover} />
+        <button onClick={onFechar} className="btn-secondary w-full">Fechar</button>
+      </div>
+    </div>
+  )
+}
+
+function EditarCompradoresModal({ compradoresHook, onFechar }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <h2 className="text-lg font-semibold mb-3">Editar compradores</h2>
+        <ListaEditavelInline titulo="Comprador" placeholder="nome do comprador" lista={compradoresHook.lista} adicionar={compradoresHook.adicionar} renomear={compradoresHook.renomear} remover={compradoresHook.remover} />
+        <button onClick={onFechar} className="btn-secondary w-full">Fechar</button>
+      </div>
     </div>
   )
 }
 
 const ABAS_NAV = [
   { id: 'estoque', label: 'Produtos', Icon: Package },
-  { id: 'compras', label: 'Compras', Icon: ShoppingCart },
-  { id: 'ajustes', label: 'Ajustes', Icon: Settings }
+  { id: 'compras', label: 'Compras', Icon: ShoppingCart }
 ]
 
 function BottomNav({ ativa, onChange }) {
@@ -1591,92 +1254,34 @@ function BottomNav({ ativa, onChange }) {
 
 export default function App() {
   const [aba, setAba] = useState('estoque')
+  const [editandoCategorias, setEditandoCategorias] = useState(false)
 
   const secoesHook = useMasterList('secoes')
   const itensHook = useMasterList('itens')
   const marcasHook = useMasterList('marcas')
-  const locaisHook = useMasterList('locais')
   const compradoresHook = useMasterList('compradores')
   const {
     produtos, loading,
-    registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada,
-    atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro
+    cadastrarProduto, atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro
   } = useProdutos()
-  const { movimentacoes, registrar, atualizar: atualizarMovimentacao, removerPorProduto } = useMovimentacoes()
 
   async function handleSalvarEntrada(dados) {
     const secao = secoesHook.lista.find((s) => s.id === dados.secaoId)
     const item = itensHook.lista.find((i) => i.id === dados.itemId)
     const marca = marcasHook.lista.find((m) => m.id === dados.marcaId)
-    const localUsado = dados.local || 'Sem local'
     const marcaIdUsado = dados.marcaId || 'sem-marca'
     const marcaNomeUsado = marca?.nome || 'Sem marca'
 
-    const produtoId = await registrarEntradaNoProduto({
+    await cadastrarProduto({
       secaoId: dados.secaoId, secaoNome: secao?.nome || '',
       itemId: dados.itemId, itemNome: item?.nome || '',
       marcaId: marcaIdUsado, marcaNome: marcaNomeUsado,
-      linhas: dados.linhas,
-      todasLinhas: dados.todasLinhas,
-      local: localUsado,
-      controlarEstoque: dados.controlarEstoque
-    })
-
-    if (dados.linhas.length > 0) {
-      await registrar({
-        tipo: 'entrada',
-        produtoId,
-        itens: dados.linhas,
-        local: localUsado,
-        data: dados.dataEntrada,
-        preco: dados.preco
-      })
-    }
-  }
-
-  async function handleEditarEntrada(movAntiga, dadosNovos) {
-    const produto = produtos.find((p) => p.id === movAntiga.produtoId)
-    if (!produto) return
-    await ajustarEdicaoEntrada(produto, movAntiga, dadosNovos)
-    await atualizarMovimentacao(movAntiga.id, {
-      itens: dadosNovos.linhas,
-      local: dadosNovos.local,
-      data: dadosNovos.data,
-      preco: dadosNovos.preco
+      todasLinhas: dados.todasLinhas
     })
   }
 
   async function handleExcluirProduto(produtoId) {
-    await removerPorProduto(produtoId)
     await removerProduto(produtoId)
-  }
-
-
-  async function handleSaida(dados) {
-    const produto = produtos.find((p) => p.id === dados.produtoId)
-    if (!produto) return
-    await aplicarSaida(produto, dados)
-    await registrar({
-      tipo: 'saida',
-      produtoId: dados.produtoId,
-      local: dados.localOrigem,
-      itens: dados.itens,
-      data: dados.data
-    })
-  }
-
-  async function handleTransferencia(dados) {
-    const produto = produtos.find((p) => p.id === dados.produtoId)
-    if (!produto) return
-    await aplicarTransferencia(produto, dados)
-    await registrar({
-      tipo: 'transferencia',
-      produtoId: dados.produtoId,
-      localOrigem: dados.localOrigem,
-      localDestino: dados.localDestino,
-      itens: dados.itens,
-      data: dados.data
-    })
   }
 
   if (loading) {
@@ -1706,33 +1311,32 @@ export default function App() {
           <h1 className="text-2xl font-display font-semibold text-ink">
             {aba === 'estoque' && 'Produtos cadastrados'}
             {aba === 'compras' && 'Lista de compras'}
-            {aba === 'ajustes' && 'Ajustes'}
           </h1>
         </header>
 
         <div className="app-shell md:mx-0 md:max-w-none">
           {aba === 'estoque' && (
             <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
-              onSaida={handleSaida} onTransferencia={handleTransferencia}
-              locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
               criarSecao={secoesHook.adicionar} criarItem={itensHook.adicionar} criarMarca={marcasHook.adicionar}
-              movimentacoes={movimentacoes} onEditarEntrada={handleEditarEntrada}
               onEditarProduto={atualizarCadastro}
               onExcluirProduto={handleExcluirProduto}
-              onSalvarEntrada={handleSalvarEntrada} />
+              onSalvarEntrada={handleSalvarEntrada}
+              onAbrirEditarCategorias={() => setEditandoCategorias(true)} />
           )}
           {aba === 'compras' && (
             <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
-              compradores={compradoresHook.lista} criarComprador={compradoresHook.adicionar}
-              movimentacoes={movimentacoes} />
-          )}
-          {aba === 'ajustes' && (
-            <AjustesPanel secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook} locaisHook={locaisHook} compradoresHook={compradoresHook} />
+              compradoresHook={compradoresHook} />
           )}
         </div>
       </div>
+
+      {editandoCategorias && (
+        <EditarCategoriasModal
+          secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook}
+          onFechar={() => setEditandoCategorias(false)} />
+      )}
     </div>
   )
 }
