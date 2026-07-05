@@ -68,9 +68,33 @@ function locaisComEstoque(produto) {
     .filter((l) => l.variantes.length > 0)
 }
 
+// Busca o nome atual de uma seção/item/marca pelo id, com fallback pro nome
+// que ficou salvo no produto (caso o cadastro original tenha sido apagado).
+function nomeAtual(lista, id, nomeFallback) {
+  const item = lista.find((x) => x.id === id)
+  return item ? item.nome : nomeFallback
+}
+
+// Pesos/variações já usados nesse produto em algum local, pra sugerir na lista de compras.
+function variantesConhecidas(produto) {
+  const mapa = new Map()
+  Object.values(produto.estoquePorLocal || {}).forEach((lista) => {
+    (lista || []).forEach((v) => {
+      const chave = `${v.peso}|${v.unidadePeso}`
+      if (!mapa.has(chave)) mapa.set(chave, { peso: v.peso, unidadePeso: v.unidadePeso })
+    })
+  })
+  return [...mapa.values()].sort((a, b) => a.peso - b.peso)
+}
+
 function comprasNormalizadas(compras) {
-  if (Array.isArray(compras?.linhas)) return { desejado: !!compras.desejado, linhas: compras.linhas }
-  return { desejado: !!compras?.desejado, linhas: [] }
+  return {
+    desejado: !!compras?.desejado,
+    linhas: Array.isArray(compras?.linhas) ? compras.linhas : [],
+    compradorId: compras?.compradorId || '',
+    compradorNome: compras?.compradorNome || '',
+    comprado: !!compras?.comprado
+  }
 }
 
 function formatarLinhaQuantidade(l) {
@@ -678,7 +702,14 @@ function MovimentacaoModal({ produto, tipo, locais, criarLocal, onConfirmar, onF
   )
 }
 
-function EstoquePanel({ produtos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas }) {
+  const produtos = useMemo(() => produtosBrutos.map((p) => ({
+    ...p,
+    itemNome: nomeAtual(itens, p.itemId, p.itemNome),
+    marcaNome: nomeAtual(marcas, p.marcaId, p.marcaNome),
+    secaoNome: nomeAtual(secoes, p.secaoId, p.secaoNome)
+  })), [produtosBrutos, itens, marcas, secoes])
+
   const controlados = produtos.filter((p) => p.controlarEstoque)
   const [carregandoId, setCarregandoId] = useState(null)
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
@@ -778,18 +809,24 @@ function EstoquePanel({ produtos, onFoto, onRemoverFoto, onSaida, onTransferenci
 let chaveCompra = 1
 const novaChaveCompra = () => String(chaveCompra++)
 
-function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
+function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarComprador }) {
   const compras = comprasNormalizadas(produto.compras)
   const [linhas, setLinhas] = useState(() =>
     compras.linhas.length > 0
       ? compras.linhas.map((l) => ({ key: novaChaveCompra(), peso: l.peso || '', unidadePeso: l.unidadePeso || 'kg', unidades: l.unidades || '' }))
       : [{ key: novaChaveCompra(), peso: '', unidadePeso: 'kg', unidades: '' }]
   )
+  const [compradorId, setCompradorId] = useState(() => compradores.find((c) => c.nome === compras.compradorNome)?.id || '')
+  const variantes = variantesConhecidas(produto)
 
-  function persistir(novasLinhas, desejado = compras.desejado) {
+  function salvar(patch) {
+    const linhasFonte = patch.linhas || linhas
     onAtualizar(produto.id, {
-      desejado,
-      linhas: novasLinhas
+      desejado: patch.desejado ?? compras.desejado,
+      compradorId: patch.compradorId ?? compras.compradorId,
+      compradorNome: patch.compradorNome ?? compras.compradorNome,
+      comprado: patch.comprado ?? compras.comprado,
+      linhas: linhasFonte
         .map((l) => ({
           peso: l.peso === '' ? 0 : Number(l.peso),
           unidadePeso: l.unidadePeso,
@@ -802,7 +839,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
   function atualizarLinha(key, campo, valor) {
     setLinhas((prev) => {
       const novas = prev.map((l) => (l.key === key ? { ...l, [campo]: valor } : l))
-      if (campo === 'unidadePeso') persistir(novas)
+      if (campo === 'unidadePeso') salvar({ linhas: novas })
       return novas
     })
   }
@@ -810,16 +847,35 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
   function removerLinha(key) {
     setLinhas((prev) => {
       const novas = prev.length > 1 ? prev.filter((l) => l.key !== key) : prev
-      persistir(novas)
+      salvar({ linhas: novas })
       return novas
     })
   }
 
+  function selecionarVariante(v) {
+    setLinhas((prev) => {
+      const jaExiste = prev.some((l) => l.peso !== '' && Number(l.peso) === v.peso && l.unidadePeso === v.unidadePeso)
+      if (jaExiste) return prev
+      const idxVazio = prev.findIndex((l) => l.peso === '' && l.unidades === '')
+      const novas = idxVazio >= 0
+        ? prev.map((l, i) => (i === idxVazio ? { ...l, peso: String(v.peso), unidadePeso: v.unidadePeso } : l))
+        : [...prev, { key: novaChaveCompra(), peso: String(v.peso), unidadePeso: v.unidadePeso, unidades: '' }]
+      salvar({ linhas: novas })
+      return novas
+    })
+  }
+
+  function escolherComprador(id) {
+    setCompradorId(id)
+    const comprador = compradores.find((c) => c.id === id)
+    salvar({ compradorId: id, compradorNome: comprador?.nome || '' })
+  }
+
   return (
-    <div className={'card p-2.5 ' + (compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
+    <div className={'card p-2.5 ' + (compras.comprado ? 'opacity-55' : compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
       <div className="flex items-center gap-2.5">
         <input type="checkbox" className="w-4.5 h-4.5 rounded accent-primary shrink-0"
-          checked={compras.desejado} onChange={() => persistir(linhas, !compras.desejado)} />
+          checked={compras.desejado} onChange={() => salvar({ desejado: !compras.desejado })} />
         {produto.foto ? (
           <button type="button" onClick={onAmpliarFoto}
             className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-line" aria-label="Ampliar foto">
@@ -830,21 +886,34 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 flex-wrap">
-            <span className="font-medium text-ink text-[13.5px] truncate">{produto.itemNome}</span>
+            <span className={'font-medium text-ink text-[13.5px] truncate ' + (compras.comprado ? 'line-through' : '')}>{produto.itemNome}</span>
             <span className="text-muted text-xs truncate">— {produto.marcaNome}</span>
           </div>
-          <span className="tag-feira text-accent-dark mt-1">{produto.secaoNome}</span>
+          <div className="flex items-center gap-1.5 flex-wrap mt-1">
+            <span className="tag-feira text-accent-dark">{produto.secaoNome}</span>
+            {compras.compradorNome && <span className="text-[10px] text-muted">👤 {compras.compradorNome}</span>}
+          </div>
         </div>
       </div>
       {compras.desejado && (
         <div className="mt-2.5 pl-[42px]">
+          {variantes.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {variantes.map((v) => (
+                <button key={`${v.peso}-${v.unidadePeso}`} type="button" onClick={() => selecionarVariante(v)}
+                  className="text-xs font-medium px-2.5 py-1 rounded-lg bg-accent-light text-accent-dark">
+                  {rotuloVariante(v)}
+                </button>
+              ))}
+            </div>
+          )}
           {linhas.map((l) => (
             <div key={l.key} className="flex gap-2 mb-2 items-center">
               <input type="number" step="0.01"
                 className="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-line bg-base text-sm"
                 value={l.peso}
                 onChange={(e) => atualizarLinha(l.key, 'peso', e.target.value)}
-                onBlur={() => persistir(linhas)}
+                onBlur={() => salvar({})}
                 placeholder="Peso" />
               <select className="w-14 px-1 py-1.5 rounded-lg border border-line bg-base text-sm"
                 value={l.unidadePeso}
@@ -855,7 +924,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
                 className="w-16 px-2 py-1.5 rounded-lg border border-line bg-base text-sm"
                 value={l.unidades}
                 onChange={(e) => atualizarLinha(l.key, 'unidades', e.target.value)}
-                onBlur={() => persistir(linhas)}
+                onBlur={() => salvar({})}
                 placeholder="Un" />
               {linhas.length > 1 && (
                 <button type="button" onClick={() => removerLinha(l.key)} className="text-danger p-1 shrink-0">
@@ -865,8 +934,15 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
             </div>
           ))}
           <button type="button" onClick={() => setLinhas((prev) => [...prev, { key: novaChaveCompra(), peso: '', unidadePeso: 'kg', unidades: '' }])}
-            className="text-xs font-medium text-primary-dark bg-primary-light px-2.5 py-1 rounded-lg flex items-center gap-1">
+            className="text-xs font-medium text-primary-dark bg-primary-light px-2.5 py-1 rounded-lg flex items-center gap-1 mb-2">
             <Plus size={12} /> Adicionar peso
+          </button>
+
+          <SelectWithQuickAdd label="Comprador" opcional valor={compradorId} onChange={escolherComprador} opcoes={compradores} onCriar={criarComprador} />
+
+          <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
+            className={'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
+            <Check size={13} /> {compras.comprado ? 'Comprado ✓' : 'Comprei'}
           </button>
         </div>
       )}
@@ -943,10 +1019,21 @@ async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
   window.open('https://wa.me/?text=' + encodeURIComponent(textoWhats), '_blank', 'noopener,noreferrer')
 }
 
-function ListaComprasPanel({ produtos, onAtualizar }) {
+function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, itens, marcas, compradores, criarComprador }) {
   const [filtro, setFiltro] = useState('todos')
   const [filtroSecao, setFiltroSecao] = useState('todas')
+  const [filtroComprador, setFiltroComprador] = useState('todos')
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
+
+  // Sempre resolve o nome atual da seção/item/marca pelo id, em vez do texto
+  // que ficou salvo na hora da entrada — assim renomear em Ajustes reflete aqui.
+  const produtos = useMemo(() => produtosBrutos.map((p) => ({
+    ...p,
+    itemNome: nomeAtual(itens, p.itemId, p.itemNome),
+    marcaNome: nomeAtual(marcas, p.marcaId, p.marcaNome),
+    secaoNome: nomeAtual(secoes, p.secaoId, p.secaoNome)
+  })), [produtosBrutos, itens, marcas, secoes])
+
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
 
   const secoesDisponiveis = useMemo(() => {
@@ -957,6 +1044,12 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
   const visiveis = produtos
     .filter((p) => (filtro === 'selecionados' ? comprasNormalizadas(p.compras).desejado : true))
     .filter((p) => (filtroSecao === 'todas' ? true : p.secaoNome === filtroSecao))
+    .filter((p) => {
+      if (filtroComprador === 'todos') return true
+      const nomeComprador = comprasNormalizadas(p.compras).compradorNome
+      if (filtroComprador === 'sem') return !nomeComprador
+      return nomeComprador === filtroComprador
+    })
 
   const selecionados = produtos
     .map((p) => ({ produto: p, compras: comprasNormalizadas(p.compras) }))
@@ -996,8 +1089,8 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
         </button>
       </div>
 
-      {secoesDisponiveis.length > 0 && (
-        <div className="mb-4">
+      <div className="flex flex-col gap-2 mb-4">
+        {secoesDisponiveis.length > 0 && (
           <select value={filtroSecao} onChange={(e) => setFiltroSecao(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
             <option value="todas">Todas as seções</option>
@@ -1005,8 +1098,18 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
               <option key={nome} value={nome}>{nome}</option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+        {compradores.length > 0 && (
+          <select value={filtroComprador} onChange={(e) => setFiltroComprador(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
+            <option value="todos">Todos os compradores</option>
+            <option value="sem">Sem comprador</option>
+            {compradores.map((c) => (
+              <option key={c.id} value={c.nome}>{c.nome}</option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {totalSel > 0 && (
         <div className="mb-4">
@@ -1029,17 +1132,18 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
       {visiveis.length === 0 && (
         <div className="card p-6 text-center">
           <p className="text-ink font-medium mb-1">
-            {filtroSecao !== 'todas' ? 'Nada nessa seção' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' ? 'Nada com esse filtro' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
           </p>
           <p className="text-sm text-muted">
-            {filtroSecao !== 'todas' ? 'Tenta escolher "Todas as seções" pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' ? 'Tenta ajustar os filtros pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
           </p>
         </div>
       )}
       <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
         {visiveis.map((p) => (
           <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar}
-            onAmpliarFoto={() => setFotoAmpliadaId(p.id)} />
+            onAmpliarFoto={() => setFotoAmpliadaId(p.id)}
+            compradores={compradores} criarComprador={criarComprador} />
         ))}
       </div>
 
@@ -1166,15 +1270,22 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
   )
 }
 
-function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditarEntrada }) {
+function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditarEntrada, secoes, itens, marcas }) {
   const [filtro, setFiltro] = useState('todos')
   const [editando, setEditando] = useState(null)
 
   const produtoPorId = useMemo(() => {
     const mapa = {}
-    produtos.forEach((p) => { mapa[p.id] = p })
+    produtos.forEach((p) => {
+      mapa[p.id] = {
+        ...p,
+        itemNome: nomeAtual(itens, p.itemId, p.itemNome),
+        marcaNome: nomeAtual(marcas, p.marcaId, p.marcaNome),
+        secaoNome: nomeAtual(secoes, p.secaoId, p.secaoNome)
+      }
+    })
     return mapa
-  }, [produtos])
+  }, [produtos, itens, marcas, secoes])
 
   const visiveis = useMemo(() => {
     const lista = filtro === 'todos' ? movimentacoes : movimentacoes.filter((m) => m.tipo === filtro)
@@ -1334,7 +1445,7 @@ function GerenciadorLista({ titulo, placeholder, lista, adicionar, renomear, rem
   )
 }
 
-function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook }) {
+function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook, compradoresHook }) {
   return (
     <div className="px-4 pt-4 pb-28">
       <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Ajustes</h2>
@@ -1343,6 +1454,7 @@ function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook }) {
       <GerenciadorLista titulo="Item" placeholder="nome do item" lista={itensHook.lista} adicionar={itensHook.adicionar} renomear={itensHook.renomear} remover={itensHook.remover} />
       <GerenciadorLista titulo="Marca" placeholder="nome da marca" lista={marcasHook.lista} adicionar={marcasHook.adicionar} renomear={marcasHook.renomear} remover={marcasHook.remover} />
       <GerenciadorLista titulo="Local" placeholder="nome do local" lista={locaisHook.lista} adicionar={locaisHook.adicionar} renomear={locaisHook.renomear} remover={locaisHook.remover} />
+      <GerenciadorLista titulo="Comprador" placeholder="nome do comprador" lista={compradoresHook.lista} adicionar={compradoresHook.adicionar} renomear={compradoresHook.renomear} remover={compradoresHook.remover} />
       <p className="text-xs text-muted -mt-2">
         Renomear ou excluir um local aqui não altera o estoque já registrado nele.
       </p>
@@ -1409,6 +1521,7 @@ export default function App() {
   const itensHook = useMasterList('itens')
   const marcasHook = useMasterList('marcas')
   const locaisHook = useMasterList('locais')
+  const compradoresHook = useMasterList('compradores')
   const {
     produtos, loading,
     registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada,
@@ -1529,16 +1642,22 @@ export default function App() {
           {aba === 'estoque' && (
             <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
               onSaida={handleSaida} onTransferencia={handleTransferencia}
-              locais={locaisHook.lista} criarLocal={locaisHook.adicionar} />
+              locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
+              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} />
           )}
-          {aba === 'compras' && <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras} />}
+          {aba === 'compras' && (
+            <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras}
+              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
+              compradores={compradoresHook.lista} criarComprador={compradoresHook.adicionar} />
+          )}
           {aba === 'relatorios' && (
             <RelatoriosPanel movimentacoes={movimentacoes} produtos={produtos}
               locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
-              onEditarEntrada={handleEditarEntrada} />
+              onEditarEntrada={handleEditarEntrada}
+              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} />
           )}
           {aba === 'ajustes' && (
-            <AjustesPanel secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook} locaisHook={locaisHook} />
+            <AjustesPanel secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook} locaisHook={locaisHook} compradoresHook={compradoresHook} />
           )}
         </div>
       </div>
