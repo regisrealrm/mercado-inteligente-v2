@@ -7,8 +7,8 @@ import { db } from './firebase.js'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
-  Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings, Inbox,
-  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store, ChevronDown
+  Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings,
+  Camera, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store, ChevronDown
 } from 'lucide-react'
 
 // ============================================================
@@ -489,8 +489,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
   }
 
   return (
-    <div className="px-4 pt-4 pb-28">
-      <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Controle de entrada</h2>
+    <div className="px-4 pb-2">
       <div className="card p-4">
         <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
         <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
@@ -559,6 +558,23 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
             Sem unidades preenchidas: só cadastra o item no catálogo, sem mexer no estoque nem no histórico. Peso sozinho, sem unidades, não conta como entrada.
           </p>
         )}
+      </div>
+    </div>
+  )
+}
+
+function EntradaModal({ onFechar, ...propsEntrada }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-end justify-center" onClick={onFechar}>
+      <div className="bg-base w-full max-w-md md:max-w-lg rounded-t-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mt-3" />
+        <div className="flex items-center justify-between px-4 pt-3 pb-1">
+          <h2 className="text-lg font-display font-semibold text-ink">Nova entrada</h2>
+          <button onClick={onFechar} className="text-muted p-1" aria-label="Fechar">
+            <X size={20} />
+          </button>
+        </div>
+        <EntradaForm {...propsEntrada} />
       </div>
     </div>
   )
@@ -857,7 +873,7 @@ function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar 
   )
 }
 
-function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, criarSecao, criarItem, criarMarca, movimentacoes, onEditarEntrada, onEditarProduto, onExcluirProduto }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, criarSecao, criarItem, criarMarca, movimentacoes, onEditarEntrada, onEditarProduto, onExcluirProduto, onSalvarEntrada }) {
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -871,6 +887,7 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
   const [editandoEntrada, setEditandoEntrada] = useState(null)
   const [editandoProduto, setEditandoProduto] = useState(null)
   const [excluindoProduto, setExcluindoProduto] = useState(null)
+  const [mostrandoEntrada, setMostrandoEntrada] = useState(false)
 
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
 
@@ -914,7 +931,13 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
 
   return (
     <div className="px-4 pt-4 pb-28">
-      <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Produtos cadastrados</h2>
+      <div className="flex items-center mb-4">
+        <h2 className="text-lg font-display font-semibold text-ink md:hidden">Produtos cadastrados</h2>
+        <button onClick={() => setMostrandoEntrada(true)}
+          className="ml-auto flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary text-white">
+          <Plus size={16} /> Entrada
+        </button>
+      </div>
       {produtos.length === 0 && (
         <div className="card p-6 text-center">
           <p className="text-ink font-medium mb-1">Nenhum produto cadastrado ainda</p>
@@ -1034,6 +1057,14 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
             await onExcluirProduto(excluindoProduto.id)
             setExcluindoProduto(null)
           }} />
+      )}
+
+      {mostrandoEntrada && (
+        <EntradaModal
+          onFechar={() => setMostrandoEntrada(false)}
+          secoes={secoes} itens={itens} marcas={marcas} locais={locais}
+          criarSecao={criarSecao} criarItem={criarItem} criarMarca={criarMarca} criarLocal={criarLocal}
+          onSalvar={onSalvarEntrada} />
       )}
     </div>
   )
@@ -1416,203 +1447,6 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
   )
 }
 
-function descreverItensMovimento(m) {
-  if (Array.isArray(m.itens) && m.itens.length > 0) {
-    return m.itens.map((v) => `${rotuloVariante(v)} ×${v.unidades}`).join('  ·  ')
-  }
-  return ''
-}
-
-function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfirmar, onFechar }) {
-  const [linhas, setLinhas] = useState(() =>
-    movimentacao.itens && movimentacao.itens.length > 0
-      ? movimentacao.itens.map((l) => ({ key: novaChaveLinha(), peso: l.peso || '', unidadePeso: l.unidadePeso || 'kg', unidades: l.unidades || '' }))
-      : [linhaVazia()]
-  )
-  const [preco, setPreco] = useState(movimentacao.preco != null ? String(movimentacao.preco) : '')
-  const [data, setData] = useState(movimentacao.data || hojeISO())
-  const [localId, setLocalId] = useState(() => locais.find((l) => l.nome === movimentacao.local)?.id || '')
-  const [controlarEstoque, setControlarEstoque] = useState(produto?.controlarEstoque ?? true)
-  const [salvando, setSalvando] = useState(false)
-
-  function atualizarLinha(key, campo, valor) {
-    setLinhas((prev) => prev.map((l) => (l.key === key ? { ...l, [campo]: valor } : l)))
-  }
-
-  async function confirmar() {
-    const localSel = locais.find((l) => l.id === localId)
-    if (!localSel || salvando) return
-    setSalvando(true)
-    try {
-      const linhasNormalizadas = linhas
-        .map((l) => ({
-          peso: l.peso === '' ? 0 : Number(l.peso),
-          unidadePeso: l.unidadePeso,
-          unidades: l.unidades === '' ? 0 : Number(l.unidades)
-        }))
-        .filter((l) => l.unidades > 0)
-      await onConfirmar({
-        linhas: linhasNormalizadas,
-        local: localSel.nome,
-        data,
-        preco: preco === '' ? null : Number(preco),
-        controlarEstoque
-      })
-    } finally {
-      setSalvando(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
-      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
-        <h2 className="text-lg font-semibold mb-1">Editar entrada</h2>
-        <p className="text-sm text-muted mb-4">{produto ? `${produto.itemNome} — ${produto.marcaNome}` : 'Item removido'}</p>
-
-        <div className="mb-1 flex items-center justify-between">
-          <label className="text-sm text-muted">Pesos e quantidades</label>
-          <button type="button" onClick={() => setLinhas((prev) => [...prev, linhaVazia()])}
-            className="text-xs font-medium text-primary-dark bg-primary-light px-2.5 py-1 rounded-lg flex items-center gap-1">
-            <Plus size={13} /> Adicionar peso
-          </button>
-        </div>
-        {linhas.map((l) => (
-          <div key={l.key} className="flex gap-2 mb-2 items-center">
-            <input type="number" step="0.01"
-              className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-base"
-              value={l.peso} onChange={(e) => atualizarLinha(l.key, 'peso', e.target.value)} placeholder="Peso" />
-            <select className="w-16 px-1 py-2 rounded-xl border border-line bg-base text-sm"
-              value={l.unidadePeso} onChange={(e) => atualizarLinha(l.key, 'unidadePeso', e.target.value)}>
-              {UNIDADES_PESO.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
-            <input type="number"
-              className="w-20 px-3 py-2 rounded-xl border border-line bg-base"
-              value={l.unidades} onChange={(e) => atualizarLinha(l.key, 'unidades', e.target.value)} placeholder="Un" />
-            {linhas.length > 1 && (
-              <button type="button" onClick={() => setLinhas((prev) => prev.filter((x) => x.key !== l.key))}
-                className="text-danger p-1 shrink-0">
-                <Trash2 size={16} />
-              </button>
-            )}
-          </div>
-        ))}
-
-        <div className="mb-3 mt-2">
-          <label className="text-sm text-muted">Preço pago (R$) — opcional</label>
-          <input type="number" step="0.01"
-            className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
-            value={preco} onChange={(e) => setPreco(e.target.value)} placeholder="0,00" />
-        </div>
-
-        <div className="mb-3">
-          <label className="text-sm text-muted">Data da entrada</label>
-          <input type="date" className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
-            value={data} onChange={(e) => setData(e.target.value)} />
-        </div>
-
-        <SelectWithQuickAdd label="Local" valor={localId} onChange={setLocalId} opcoes={locais} onCriar={criarLocal} />
-
-        <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
-          <input type="checkbox" className="w-5 h-5 rounded accent-primary"
-            checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
-          <span className="text-sm text-ink">Controlar estoque deste item</span>
-        </label>
-
-        <p className="text-[11px] text-muted mb-3">
-          O estoque é ajustado automaticamente: o que essa entrada tinha somado é removido e o novo valor é aplicado no lugar. Desmarcar aqui também para de contar o estoque deste produto a partir de agora.
-        </p>
-
-        <div className="flex gap-2 mt-2">
-          <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
-          <button disabled={salvando || !localId} onClick={confirmar} className="btn-primary flex-1 disabled:opacity-40">
-            {salvando ? 'Salvando...' : 'Salvar alterações'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function RelatoriosPanel({ movimentacoes, produtos, secoes, itens, marcas }) {
-  const [filtro, setFiltro] = useState('todos')
-
-  const produtoPorId = useMemo(() => {
-    const mapa = {}
-    produtos.forEach((p) => {
-      mapa[p.id] = {
-        ...p,
-        itemNome: nomeAtual(itens, p.itemId, p.itemNome),
-        marcaNome: nomeAtual(marcas, p.marcaId, p.marcaNome),
-        secaoNome: nomeAtual(secoes, p.secaoId, p.secaoNome)
-      }
-    })
-    return mapa
-  }, [produtos, itens, marcas, secoes])
-
-  const visiveis = useMemo(() => {
-    const lista = filtro === 'todos' ? movimentacoes : movimentacoes.filter((m) => m.tipo === filtro)
-    return [...lista].sort((a, b) => (b.data || '').localeCompare(a.data || ''))
-  }, [movimentacoes, filtro])
-
-  const estilos = {
-    entrada: { label: 'Entrada', cor: 'bg-primary-light text-primary-dark', stripe: '#2F8145' },
-    saida: { label: 'Saída', cor: 'bg-danger-light text-danger', stripe: '#D6472A' },
-    transferencia: { label: 'Transferência', cor: 'bg-warn-light text-warn', stripe: '#E0961F' }
-  }
-
-  return (
-    <div className="px-4 pt-4 pb-28">
-      <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Relatórios</h2>
-
-      <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
-        {[
-          { id: 'todos', label: 'Todos' },
-          { id: 'entrada', label: 'Entradas' },
-          { id: 'saida', label: 'Saídas' },
-          { id: 'transferencia', label: 'Transferências' }
-        ].map((f) => (
-          <button key={f.id} onClick={() => setFiltro(f.id)}
-            className={'chip whitespace-nowrap ' + (filtro === f.id ? 'bg-primary text-white border-primary' : 'bg-surface text-muted border-line')}>
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {visiveis.length === 0 && (
-        <div className="card p-6 text-center">
-          <p className="text-ink font-medium mb-1">Nada por aqui ainda</p>
-          <p className="text-sm text-muted">O histórico de entradas, saídas e transferências aparece aqui.</p>
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
-        {visiveis.map((m) => {
-          const produto = produtoPorId[m.produtoId]
-          const estilo = estilos[m.tipo]
-          if (!estilo) return null
-          return (
-            <div key={m.id} className="card card-accent p-3" style={{ '--accent-stripe': estilo.stripe }}>
-              <div className="flex items-center justify-between mb-1">
-                <span className={'text-[11px] font-semibold px-2 py-0.5 rounded-full ' + estilo.cor}>{estilo.label}</span>
-                <span className="text-xs text-muted">{formatarData(m.data)}</span>
-              </div>
-              <div className="font-medium text-ink">
-                {produto ? `${produto.itemNome} — ${produto.marcaNome}` : 'Item removido'}
-              </div>
-              <div className="text-sm text-muted mt-0.5">{descreverItensMovimento(m)}</div>
-              <div className="text-xs text-muted mt-1">
-                {m.tipo === 'transferencia' ? `${m.localOrigem} → ${m.localDestino}` : (m.local || m.localOrigem || '—')}
-                {m.tipo === 'entrada' && m.preco != null && ` · R$ ${Number(m.preco).toFixed(2)}`}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 function GerenciadorLista({ titulo, placeholder, lista, adicionar, renomear, remover }) {
   const [aberto, setAberto] = useState(false)
   const [novoNome, setNovoNome] = useState('')
@@ -1706,10 +1540,8 @@ function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook, comprador
 }
 
 const ABAS_NAV = [
-  { id: 'entrada', label: 'Entrada', Icon: Inbox },
   { id: 'estoque', label: 'Produtos', Icon: Package },
   { id: 'compras', label: 'Compras', Icon: ShoppingCart },
-  { id: 'relatorios', label: 'Relatórios', Icon: ClipboardList },
   { id: 'ajustes', label: 'Ajustes', Icon: Settings }
 ]
 
@@ -1758,7 +1590,7 @@ function BottomNav({ ativa, onChange }) {
 // ============================================================
 
 export default function App() {
-  const [aba, setAba] = useState('entrada')
+  const [aba, setAba] = useState('estoque')
 
   const secoesHook = useMasterList('secoes')
   const itensHook = useMasterList('itens')
@@ -1872,22 +1704,13 @@ export default function App() {
 
         <header className="hidden md:block px-8 pt-8 pb-2">
           <h1 className="text-2xl font-display font-semibold text-ink">
-            {aba === 'entrada' && 'Controle de entrada'}
             {aba === 'estoque' && 'Produtos cadastrados'}
             {aba === 'compras' && 'Lista de compras'}
-            {aba === 'relatorios' && 'Relatórios'}
             {aba === 'ajustes' && 'Ajustes'}
           </h1>
         </header>
 
         <div className="app-shell md:mx-0 md:max-w-none">
-          {aba === 'entrada' && (
-            <EntradaForm
-              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} locais={locaisHook.lista}
-              criarSecao={secoesHook.adicionar} criarItem={itensHook.adicionar}
-              criarMarca={marcasHook.adicionar} criarLocal={locaisHook.adicionar}
-              onSalvar={handleSalvarEntrada} />
-          )}
           {aba === 'estoque' && (
             <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
               onSaida={handleSaida} onTransferencia={handleTransferencia}
@@ -1896,17 +1719,14 @@ export default function App() {
               criarSecao={secoesHook.adicionar} criarItem={itensHook.adicionar} criarMarca={marcasHook.adicionar}
               movimentacoes={movimentacoes} onEditarEntrada={handleEditarEntrada}
               onEditarProduto={atualizarCadastro}
-              onExcluirProduto={handleExcluirProduto} />
+              onExcluirProduto={handleExcluirProduto}
+              onSalvarEntrada={handleSalvarEntrada} />
           )}
           {aba === 'compras' && (
             <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
               compradores={compradoresHook.lista} criarComprador={compradoresHook.adicionar}
               movimentacoes={movimentacoes} />
-          )}
-          {aba === 'relatorios' && (
-            <RelatoriosPanel movimentacoes={movimentacoes} produtos={produtos}
-              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} />
           )}
           {aba === 'ajustes' && (
             <AjustesPanel secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook} locaisHook={locaisHook} compradoresHook={compradoresHook} />
