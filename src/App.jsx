@@ -8,7 +8,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
   Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings, Inbox,
-  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store
+  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store, ChevronDown
 } from 'lucide-react'
 
 // ============================================================
@@ -327,13 +327,20 @@ function useMovimentacoes() {
 function SelectWithQuickAdd({ label, valor, onChange, opcoes, onCriar }) {
   const [criando, setCriando] = useState(false)
   const [novoNome, setNovoNome] = useState('')
+  const [erro, setErro] = useState('')
 
   async function confirmar() {
     const nome = novoNome.trim()
     if (!nome) return
+    const existe = opcoes.some((o) => o.nome.toLowerCase() === nome.toLowerCase())
+    if (existe) {
+      setErro(`Já existe um(a) ${label.toLowerCase()} com esse nome`)
+      return
+    }
     const id = await onCriar(nome)
     if (id) onChange(id)
     setNovoNome('')
+    setErro('')
     setCriando(false)
   }
 
@@ -359,19 +366,22 @@ function SelectWithQuickAdd({ label, valor, onChange, opcoes, onCriar }) {
           </button>
         </div>
       ) : (
-        <div className="flex gap-2 mt-1">
-          <input autoFocus
-            className="flex-1 px-3 py-2 rounded-xl border border-primary bg-base text-ink"
-            value={novoNome} onChange={(e) => setNovoNome(e.target.value)}
-            placeholder={`Nome d${label.toLowerCase().startsWith('se') ? 'a' : 'o'} novo ${label.toLowerCase()}`}
-            onKeyDown={(e) => e.key === 'Enter' && confirmar()} />
-          <button onClick={confirmar} className="w-11 h-11 shrink-0 rounded-xl bg-primary text-white flex items-center justify-center">
-            <Check size={18} />
-          </button>
-          <button onClick={() => { setCriando(false); setNovoNome('') }}
-            className="w-11 h-11 shrink-0 rounded-xl bg-line text-ink flex items-center justify-center">
-            <X size={18} />
-          </button>
+        <div>
+          <div className="flex gap-2 mt-1">
+            <input autoFocus
+              className={'flex-1 px-3 py-2 rounded-xl border bg-base text-ink ' + (erro ? 'border-danger' : 'border-primary')}
+              value={novoNome} onChange={(e) => { setNovoNome(e.target.value); setErro('') }}
+              placeholder={`Nome d${label.toLowerCase().startsWith('se') ? 'a' : 'o'} novo ${label.toLowerCase()}`}
+              onKeyDown={(e) => e.key === 'Enter' && confirmar()} />
+            <button onClick={confirmar} className="w-11 h-11 shrink-0 rounded-xl bg-primary text-white flex items-center justify-center">
+              <Check size={18} />
+            </button>
+            <button onClick={() => { setCriando(false); setNovoNome(''); setErro('') }}
+              className="w-11 h-11 shrink-0 rounded-xl bg-line text-ink flex items-center justify-center">
+              <X size={18} />
+            </button>
+          </div>
+          {erro && <p className="text-xs text-danger mt-1.5">{erro}</p>}
         </div>
       )}
     </div>
@@ -1226,15 +1236,24 @@ function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditar
   )
 }
 
-function GerenciadorLista({ titulo, lista, adicionar, renomear, remover }) {
+function GerenciadorLista({ titulo, placeholder, lista, adicionar, renomear, remover }) {
+  const [aberto, setAberto] = useState(false)
   const [novoNome, setNovoNome] = useState('')
+  const [erro, setErro] = useState('')
   const [editandoId, setEditandoId] = useState(null)
   const [nomeEdicao, setNomeEdicao] = useState('')
 
   async function handleAdicionar() {
-    if (!novoNome.trim()) return
-    await adicionar(novoNome)
+    const nome = novoNome.trim()
+    if (!nome) return
+    const existe = lista.some((i) => i.nome.toLowerCase() === nome.toLowerCase())
+    if (existe) {
+      setErro(`Já existe "${nome}" nessa lista`)
+      return
+    }
+    await adicionar(nome)
     setNovoNome('')
+    setErro('')
   }
 
   function iniciarEdicao(item) {
@@ -1249,35 +1268,45 @@ function GerenciadorLista({ titulo, lista, adicionar, renomear, remover }) {
 
   return (
     <div className="card p-4 mb-4">
-      <h3 className="font-medium text-ink mb-3">{titulo}</h3>
-      <div className="flex gap-2 mb-3">
-        <input className="flex-1 px-3 py-2 rounded-xl border border-line bg-base"
-          value={novoNome} onChange={(e) => setNovoNome(e.target.value)}
-          placeholder={`Nova ${titulo.toLowerCase().slice(0, -1)}...`}
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-ink">{titulo} <span className="text-muted font-normal text-sm">({lista.length})</span></h3>
+        <button onClick={() => setAberto((v) => !v)} className="text-muted p-1" aria-label={aberto ? 'Recolher lista' : 'Expandir lista'}>
+          <ChevronDown size={18} className={'transition-transform ' + (aberto ? 'rotate-180' : '')} />
+        </button>
+      </div>
+      <div className="flex gap-2">
+        <input className="flex-1 px-3 py-2 rounded-xl border bg-base"
+          style={{ borderColor: erro ? '#D6472A' : undefined }}
+          value={novoNome} onChange={(e) => { setNovoNome(e.target.value); setErro('') }}
+          placeholder={placeholder}
           onKeyDown={(e) => e.key === 'Enter' && handleAdicionar()} />
         <button onClick={handleAdicionar} className="btn-primary px-4">Add</button>
       </div>
-      <div className="flex flex-col gap-1.5">
-        {lista.map((item) => (
-          <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-line last:border-0">
-            {editandoId === item.id ? (
-              <>
-                <input autoFocus className="flex-1 px-2 py-1 rounded-lg border border-primary bg-base text-sm"
-                  value={nomeEdicao} onChange={(e) => setNomeEdicao(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && confirmarEdicao()} />
-                <button onClick={confirmarEdicao} className="text-primary-dark text-sm font-medium px-2">Salvar</button>
-              </>
-            ) : (
-              <>
-                <span className="flex-1 text-sm text-ink">{item.nome}</span>
-                <button onClick={() => iniciarEdicao(item)} className="text-muted p-1.5"><Pencil size={15} /></button>
-                <button onClick={() => remover(item.id)} className="text-danger p-1.5"><Trash2 size={15} /></button>
-              </>
-            )}
-          </div>
-        ))}
-        {lista.length === 0 && <p className="text-sm text-muted py-2">Nenhuma ainda.</p>}
-      </div>
+      {erro && <p className="text-xs text-danger mt-1.5">{erro}</p>}
+
+      {aberto && (
+        <div className="flex flex-col gap-1.5 mt-3">
+          {lista.map((item) => (
+            <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-line last:border-0">
+              {editandoId === item.id ? (
+                <>
+                  <input autoFocus className="flex-1 px-2 py-1 rounded-lg border border-primary bg-base text-sm"
+                    value={nomeEdicao} onChange={(e) => setNomeEdicao(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && confirmarEdicao()} />
+                  <button onClick={confirmarEdicao} className="text-primary-dark text-sm font-medium px-2">Salvar</button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 text-sm text-ink">{item.nome}</span>
+                  <button onClick={() => iniciarEdicao(item)} className="text-muted p-1.5"><Pencil size={15} /></button>
+                  <button onClick={() => remover(item.id)} className="text-danger p-1.5"><Trash2 size={15} /></button>
+                </>
+              )}
+            </div>
+          ))}
+          {lista.length === 0 && <p className="text-sm text-muted py-2">Nenhuma ainda.</p>}
+        </div>
+      )}
     </div>
   )
 }
@@ -1287,10 +1316,10 @@ function AjustesPanel({ secoesHook, itensHook, marcasHook, locaisHook }) {
     <div className="px-4 pt-4 pb-28">
       <h2 className="text-lg font-display font-semibold text-ink mb-4 md:hidden">Ajustes</h2>
       <p className="text-sm text-muted mb-4">Gerencie aqui as opções que aparecem no Controle de entrada.</p>
-      <GerenciadorLista titulo="Seções" lista={secoesHook.lista} adicionar={secoesHook.adicionar} renomear={secoesHook.renomear} remover={secoesHook.remover} />
-      <GerenciadorLista titulo="Itens" lista={itensHook.lista} adicionar={itensHook.adicionar} renomear={itensHook.renomear} remover={itensHook.remover} />
-      <GerenciadorLista titulo="Marcas" lista={marcasHook.lista} adicionar={marcasHook.adicionar} renomear={marcasHook.renomear} remover={marcasHook.remover} />
-      <GerenciadorLista titulo="Locais" lista={locaisHook.lista} adicionar={locaisHook.adicionar} renomear={locaisHook.renomear} remover={locaisHook.remover} />
+      <GerenciadorLista titulo="Seção" placeholder="nome da seção" lista={secoesHook.lista} adicionar={secoesHook.adicionar} renomear={secoesHook.renomear} remover={secoesHook.remover} />
+      <GerenciadorLista titulo="Item" placeholder="nome do item" lista={itensHook.lista} adicionar={itensHook.adicionar} renomear={itensHook.renomear} remover={itensHook.remover} />
+      <GerenciadorLista titulo="Marca" placeholder="nome da marca" lista={marcasHook.lista} adicionar={marcasHook.adicionar} renomear={marcasHook.renomear} remover={marcasHook.remover} />
+      <GerenciadorLista titulo="Local" placeholder="nome do local" lista={locaisHook.lista} adicionar={locaisHook.adicionar} renomear={locaisHook.renomear} remover={locaisHook.remover} />
       <p className="text-xs text-muted -mt-2">
         Renomear ou excluir um local aqui não altera o estoque já registrado nele.
       </p>
