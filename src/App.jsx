@@ -652,19 +652,18 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
                 </div>
                 <span className="tag-feira text-primary-dark mt-1">{p.secaoNome}</span>
               </div>
-            </div>
-
-            <div className="flex gap-1.5 mt-2 pl-[46px]">
-              <button onClick={() => setEditandoProduto(p)}
-                title="Editar cadastro" aria-label="Editar cadastro"
-                className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
-                <Pencil size={12} />
-              </button>
-              <button onClick={() => setExcluindoProduto(p)}
-                title="Excluir produto" aria-label="Excluir produto"
-                className="flex items-center justify-center w-7 h-7 rounded-lg bg-danger-light text-danger">
-                <Trash2 size={12} />
-              </button>
+              <div className="flex gap-1.5 shrink-0">
+                <button onClick={() => setEditandoProduto(p)}
+                  title="Editar cadastro" aria-label="Editar cadastro"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
+                  <Pencil size={12} />
+                </button>
+                <button onClick={() => setExcluindoProduto(p)}
+                  title="Excluir produto" aria-label="Excluir produto"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-danger-light text-danger">
+                  <Trash2 size={12} />
+                </button>
+              </div>
             </div>
           </div>
         ))}
