@@ -411,7 +411,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
     unidadePeso: l.unidadePeso,
     unidades: l.unidades === '' ? 0 : Number(l.unidades)
   }))
-  const linhasComMovimento = linhasNormalizadas.filter((l) => l.peso > 0 || l.unidades > 0)
+  const linhasComMovimento = linhasNormalizadas.filter((l) => l.unidades > 0)
   const semMovimento = linhasComMovimento.length === 0
 
   function atualizarLinha(key, campo, valor) {
@@ -508,7 +508,7 @@ function EntradaForm({ secoes, itens, marcas, locais, criarSecao, criarItem, cri
 
         {semMovimento && (
           <p className="text-xs text-muted mt-2 text-center">
-            Sem peso e sem unidades: só cadastra o item no catálogo, sem mexer no estoque nem no histórico.
+            Sem unidades preenchidas: só cadastra o item no catálogo, sem mexer no estoque nem no histórico. Peso sozinho, sem unidades, não conta como entrada.
           </p>
         )}
       </div>
@@ -945,11 +945,18 @@ async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
 
 function ListaComprasPanel({ produtos, onAtualizar }) {
   const [filtro, setFiltro] = useState('todos')
+  const [filtroSecao, setFiltroSecao] = useState('todas')
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
-  const visiveis = filtro === 'selecionados'
-    ? produtos.filter((p) => comprasNormalizadas(p.compras).desejado)
-    : produtos
+
+  const secoesDisponiveis = useMemo(() => {
+    const nomes = new Set(produtos.map((p) => p.secaoNome).filter(Boolean))
+    return [...nomes].sort((a, b) => a.localeCompare(b))
+  }, [produtos])
+
+  const visiveis = produtos
+    .filter((p) => (filtro === 'selecionados' ? comprasNormalizadas(p.compras).desejado : true))
+    .filter((p) => (filtroSecao === 'todas' ? true : p.secaoNome === filtroSecao))
 
   const selecionados = produtos
     .map((p) => ({ produto: p, compras: comprasNormalizadas(p.compras) }))
@@ -989,6 +996,18 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
         </button>
       </div>
 
+      {secoesDisponiveis.length > 0 && (
+        <div className="mb-4">
+          <select value={filtroSecao} onChange={(e) => setFiltroSecao(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
+            <option value="todas">Todas as seções</option>
+            {secoesDisponiveis.map((nome) => (
+              <option key={nome} value={nome}>{nome}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {totalSel > 0 && (
         <div className="mb-4">
           <div className="flex gap-2">
@@ -1009,8 +1028,12 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
 
       {visiveis.length === 0 && (
         <div className="card p-6 text-center">
-          <p className="text-ink font-medium mb-1">{filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}</p>
-          <p className="text-sm text-muted">{filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}</p>
+          <p className="text-ink font-medium mb-1">
+            {filtroSecao !== 'todas' ? 'Nada nessa seção' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
+          </p>
+          <p className="text-sm text-muted">
+            {filtroSecao !== 'todas' ? 'Tenta escolher "Todas as seções" pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
+          </p>
         </div>
       )}
       <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
@@ -1059,7 +1082,7 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
           unidadePeso: l.unidadePeso,
           unidades: l.unidades === '' ? 0 : Number(l.unidades)
         }))
-        .filter((l) => l.peso > 0 || l.unidades > 0)
+        .filter((l) => l.unidades > 0)
       await onConfirmar({
         linhas: linhasNormalizadas,
         local: localSel.nome,
