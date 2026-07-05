@@ -8,7 +8,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
   Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings, Inbox,
-  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, FileDown, Share2, Store
+  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store
 } from 'lucide-react'
 
 // ============================================================
@@ -512,7 +512,7 @@ function FotoThumb({ produto, onEscolherArquivo, onAmpliar, carregando }) {
   if (produto.foto) {
     return (
       <button type="button" onClick={() => onAmpliar(produto)}
-        className="w-12 h-12 rounded-xl overflow-hidden border border-line shrink-0"
+        className="w-9 h-9 rounded-lg overflow-hidden border border-line shrink-0"
         aria-label="Ampliar foto">
         <img src={produto.foto.thumb} alt={produto.itemNome} className="w-full h-full object-cover" />
       </button>
@@ -522,9 +522,9 @@ function FotoThumb({ produto, onEscolherArquivo, onAmpliar, carregando }) {
   return (
     <>
       <button type="button" onClick={() => inputRef.current?.click()} disabled={carregando}
-        className="w-12 h-12 rounded-xl border border-dashed border-line text-muted shrink-0 flex items-center justify-center bg-base"
+        className="w-9 h-9 rounded-lg border border-dashed border-line text-muted shrink-0 flex items-center justify-center bg-base"
         aria-label="Adicionar foto">
-        {carregando ? <Loader2 size={16} className="animate-spin" /> : <Camera size={18} />}
+        {carregando ? <Loader2 size={14} className="animate-spin" /> : <Camera size={15} />}
       </button>
       <input ref={inputRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onEscolherArquivo(produto.id, f); e.target.value = '' }} />
@@ -706,27 +706,26 @@ function EstoquePanel({ produtos, onFoto, onRemoverFoto, onSaida, onTransferenci
           const porLocal = locaisComEstoque(p)
           const temEstoque = totalUn > 0
           return (
-            <div key={p.id} className="card card-accent p-3" style={{ '--accent-stripe': temEstoque ? '#2F8145' : '#D6472A' }}>
-              <div className="flex items-center gap-3">
+            <div key={p.id} className="card card-accent p-2.5" style={{ '--accent-stripe': temEstoque ? '#2F8145' : '#D6472A' }}>
+              <div className="flex items-center gap-2.5">
                 <FotoThumb produto={p} onEscolherArquivo={handleEscolherArquivo} onAmpliar={(produto) => setFotoAmpliadaId(produto.id)} carregando={carregandoId === p.id} />
-                <div className="flex-1 min-w-0 flex items-center justify-between">
-                  <div className="min-w-0">
-                    <div className="font-medium text-ink truncate">
-                      {p.itemNome} <span className="text-muted font-normal">— {p.marcaNome}</span>
-                    </div>
-                    <span className="tag-feira text-primary-dark mt-0.5">{p.secaoNome}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-ink text-[13.5px] truncate">{p.itemNome}</span>
+                    <span className="text-muted text-xs truncate">— {p.marcaNome}</span>
                   </div>
-                  <div className="text-right shrink-0 pl-2">
-                    <div className="font-mono font-semibold text-primary-dark">{totalUn} un</div>
-                    <div className="text-xs text-muted">total</div>
-                  </div>
+                  <span className="tag-feira text-primary-dark mt-1">{p.secaoNome}</span>
+                </div>
+                <div className="text-right shrink-0 pl-1">
+                  <div className="font-mono font-bold text-primary-dark leading-none text-[15px]">{totalUn}</div>
+                  <div className="text-[9px] text-muted uppercase tracking-wide">un total</div>
                 </div>
               </div>
 
               {porLocal.length > 0 && (
-                <div className="flex flex-col gap-1 mt-2 ml-[60px]">
+                <div className="flex flex-col gap-0.5 mt-2 pl-[46px]">
                   {porLocal.map((l) => (
-                    <div key={l.nome} className="text-[11px] text-muted">
+                    <div key={l.nome} className="text-[10.5px] text-muted truncate">
                       <span className="font-medium text-ink">{l.nome}:</span>{' '}
                       {l.variantes.map((v) => `${rotuloVariante(v)} ×${v.unidades}`).join('  ·  ')}
                     </div>
@@ -734,14 +733,14 @@ function EstoquePanel({ produtos, onFoto, onRemoverFoto, onSaida, onTransferenci
                 </div>
               )}
 
-              <div className="flex gap-2 mt-3 ml-[60px]">
+              <div className="flex gap-1.5 mt-2 pl-[46px]">
                 <button disabled={!temEstoque} onClick={() => setModal({ tipo: 'saida', produto: p })}
-                  className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-danger-light text-danger disabled:opacity-40">
-                  <LogOut size={13} /> Saída
+                  className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-danger-light text-danger disabled:opacity-40">
+                  <LogOut size={12} /> Saída
                 </button>
                 <button disabled={!temEstoque} onClick={() => setModal({ tipo: 'transferencia', produto: p })}
-                  className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-warn-light text-warn disabled:opacity-40">
-                  <ArrowLeftRight size={13} /> Transferir
+                  className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-warn-light text-warn disabled:opacity-40">
+                  <ArrowLeftRight size={12} /> Transferir
                 </button>
               </div>
             </div>
@@ -807,27 +806,28 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
   }
 
   return (
-    <div className={'card p-3 ' + (compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
-      <div className="flex items-center gap-3">
-        <input type="checkbox" className="w-5 h-5 rounded accent-primary shrink-0"
+    <div className={'card p-2.5 ' + (compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
+      <div className="flex items-center gap-2.5">
+        <input type="checkbox" className="w-4.5 h-4.5 rounded accent-primary shrink-0"
           checked={compras.desejado} onChange={() => persistir(linhas, !compras.desejado)} />
         {produto.foto ? (
           <button type="button" onClick={onAmpliarFoto}
-            className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-line" aria-label="Ampliar foto">
+            className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-line" aria-label="Ampliar foto">
             <img src={produto.foto.thumb} alt={produto.itemNome} className="w-full h-full object-cover" />
           </button>
         ) : (
-          <div className="w-10 h-10 rounded-lg bg-line shrink-0" />
+          <div className="w-9 h-9 rounded-lg bg-line shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-ink truncate">
-            {produto.itemNome} <span className="text-muted font-normal">— {produto.marcaNome}</span>
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            <span className="font-medium text-ink text-[13.5px] truncate">{produto.itemNome}</span>
+            <span className="text-muted text-xs truncate">— {produto.marcaNome}</span>
           </div>
-          <span className="tag-feira text-accent-dark mt-0.5">{produto.secaoNome}</span>
+          <span className="tag-feira text-accent-dark mt-1">{produto.secaoNome}</span>
         </div>
       </div>
       {compras.desejado && (
-        <div className="mt-3 pl-[52px]">
+        <div className="mt-2.5 pl-[42px]">
           {linhas.map((l) => (
             <div key={l.key} className="flex gap-2 mb-2 items-center">
               <input type="number" step="0.01"
@@ -875,50 +875,38 @@ function gerarTextoWhatsApp(selecionados) {
 
 function gerarPdfCompras(selecionados) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-  const margem = 14
+  const margem = 12
 
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(16)
-  doc.text('Lista de compras — Mercado Inteligente', margem, 18)
+  doc.setFontSize(13)
+  doc.text('Lista de compras — Mercado Inteligente', margem, 14)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(10)
+  doc.setFontSize(8.5)
   doc.setTextColor(120)
-  doc.text(formatarData(hojeISO()), margem, 24)
+  doc.text(formatarData(hojeISO()), margem, 19)
   doc.setTextColor(0)
 
   autoTable(doc, {
-    startY: 30,
-    head: [['', 'Foto', 'Produto', 'Quantidade']],
+    startY: 23,
+    head: [['', 'Produto', 'Quantidade']],
     body: selecionados.map(({ produto, compras }) => [
-      '', '',
-      `${produto.itemNome} — ${produto.marcaNome}\n${produto.secaoNome}`,
+      '',
+      `${produto.itemNome} — ${produto.marcaNome}  ·  ${produto.secaoNome}`,
       linhasQuantidadeFormatadas(compras.linhas).join('\n') || '—'
     ]),
-    styles: { font: 'helvetica', fontSize: 10, cellPadding: 3, valign: 'middle', minCellHeight: 12 },
-    headStyles: { fillColor: [47, 129, 69], textColor: 255 },
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 2, valign: 'middle', minCellHeight: 7 },
+    headStyles: { fillColor: [47, 129, 69], textColor: 255, fontSize: 9 },
     columnStyles: {
-      0: { cellWidth: 10 },
-      1: { cellWidth: 16 },
-      2: { cellWidth: 'auto' },
-      3: { cellWidth: 42 }
+      0: { cellWidth: 7 },
+      1: { cellWidth: 'auto' },
+      2: { cellWidth: 34 }
     },
     didDrawCell: (data) => {
-      if (data.section !== 'body') return
+      if (data.section !== 'body' || data.column.index !== 0) return
       const { x, y, width, height } = data.cell
-      if (data.column.index === 0) {
-        const tam = 4.5
-        doc.setDrawColor(120)
-        doc.rect(x + width / 2 - tam / 2, y + height / 2 - tam / 2, tam, tam)
-      }
-      if (data.column.index === 1) {
-        const produto = selecionados[data.row.index]?.produto
-        if (produto?.foto?.thumb) {
-          try {
-            const tamImg = Math.min(width, height) - 3
-            doc.addImage(produto.foto.thumb, 'JPEG', x + (width - tamImg) / 2, y + (height - tamImg) / 2, tamImg, tamImg)
-          } catch (e) { /* miniatura inválida, ignora */ }
-        }
-      }
+      const tam = 3.2
+      doc.setDrawColor(140)
+      doc.rect(x + width / 2 - tam / 2, y + height / 2 - tam / 2, tam, tam)
     }
   })
 
@@ -958,9 +946,10 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
     .filter((x) => x.compras.desejado)
   const totalSel = selecionados.length
 
-  function handleBaixarPdf() {
+  function handleImprimir() {
     const doc = gerarPdfCompras(selecionados)
-    doc.save('lista-de-compras.pdf')
+    doc.autoPrint()
+    window.open(doc.output('bloburl'), '_blank')
   }
 
   async function handleWhatsApp() {
@@ -993,9 +982,9 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
       {totalSel > 0 && (
         <div className="mb-4">
           <div className="flex gap-2">
-            <button onClick={handleBaixarPdf}
+            <button onClick={handleImprimir}
               className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-ink text-white">
-              <FileDown size={15} /> Baixar PDF (A4)
+              <Printer size={15} /> Imprimir
             </button>
             <button onClick={handleWhatsApp}
               className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary text-white">
@@ -1003,7 +992,7 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
             </button>
           </div>
           <p className="text-[11px] text-muted mt-1.5 text-center">
-            No celular, "Enviar no WhatsApp" já abre com o PDF anexado. Se o aparelho não suportar, ele baixa o PDF e abre o WhatsApp pra você anexar na conversa.
+            "Imprimir" abre o relatório pronto pra impressora. No celular, "Enviar no WhatsApp" já anexa o PDF direto; se o aparelho não suportar, ele baixa o PDF e abre o WhatsApp pra anexar na conversa.
           </p>
         </div>
       )}
