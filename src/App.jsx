@@ -278,7 +278,14 @@ function useProdutos() {
     })
   }
 
-  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto }
+  async function removerFoto(produtoId) {
+    return updateDoc(doc(db, PRODUTOS_COLLECTION, produtoId), {
+      foto: null,
+      atualizadoEm: serverTimestamp()
+    })
+  }
+
+  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto, removerFoto }
 }
 
 const MOVIMENTACOES_COLLECTION = 'movimentacoes'
@@ -525,16 +532,41 @@ function FotoThumb({ produto, onEscolherArquivo, onAmpliar, carregando }) {
   )
 }
 
-function FotoAmpliadaModal({ produto, onFechar }) {
-  if (!produto) return null
+function FotoAmpliadaModal({ produto, onFechar, onTrocarFoto, onRemoverFoto, carregando }) {
+  const inputRef = useRef(null)
+  if (!produto || !produto.foto) return null
+
   return (
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6" onClick={onFechar}>
       <div className="max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         <img src={produto.foto.fullUrl || produto.foto.thumb} alt={produto.itemNome} className="w-full rounded-2xl" />
         <p className="text-white text-center text-sm mt-3">{produto.itemNome} — {produto.marcaNome}</p>
-        <button onClick={onFechar} className="mx-auto mt-3 flex items-center gap-1 text-white/70 text-sm">
+
+        {(onTrocarFoto || onRemoverFoto) && (
+          <div className="flex items-center justify-center gap-3 mt-4">
+            {onTrocarFoto && (
+              <button onClick={() => inputRef.current?.click()} disabled={carregando}
+                className="flex items-center gap-1.5 text-sm text-white/90 bg-white/10 px-3 py-1.5 rounded-lg disabled:opacity-50">
+                {carregando ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />} Trocar foto
+              </button>
+            )}
+            {onRemoverFoto && (
+              <button onClick={() => onRemoverFoto(produto.id)} disabled={carregando}
+                className="flex items-center gap-1.5 text-sm text-white/90 bg-white/10 px-3 py-1.5 rounded-lg disabled:opacity-50">
+                <Trash2 size={14} /> Remover
+              </button>
+            )}
+          </div>
+        )}
+
+        <button onClick={onFechar} className="mx-auto mt-4 flex items-center gap-1 text-white/70 text-sm">
           <X size={14} /> Fechar
         </button>
+
+        {onTrocarFoto && (
+          <input ref={inputRef} type="file" accept="image/*" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onTrocarFoto(produto.id, f); e.target.value = '' }} />
+        )}
       </div>
     </div>
   )
@@ -636,15 +668,27 @@ function MovimentacaoModal({ produto, tipo, locais, criarLocal, onConfirmar, onF
   )
 }
 
-function EstoquePanel({ produtos, onFoto, onSaida, onTransferencia, locais, criarLocal }) {
+function EstoquePanel({ produtos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal }) {
   const controlados = produtos.filter((p) => p.controlarEstoque)
   const [carregandoId, setCarregandoId] = useState(null)
-  const [fotoAmpliada, setFotoAmpliada] = useState(null)
+  const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
   const [modal, setModal] = useState(null)
+
+  const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
 
   async function handleEscolherArquivo(produtoId, file) {
     setCarregandoId(produtoId)
     try { await onFoto(produtoId, file) } finally { setCarregandoId(null) }
+  }
+
+  async function handleRemoverFoto(produtoId) {
+    setCarregandoId(produtoId)
+    try {
+      await onRemoverFoto(produtoId)
+      setFotoAmpliadaId(null)
+    } finally {
+      setCarregandoId(null)
+    }
   }
 
   return (
@@ -664,7 +708,7 @@ function EstoquePanel({ produtos, onFoto, onSaida, onTransferencia, locais, cria
           return (
             <div key={p.id} className="card card-accent p-3" style={{ '--accent-stripe': temEstoque ? '#2F8145' : '#D6472A' }}>
               <div className="flex items-center gap-3">
-                <FotoThumb produto={p} onEscolherArquivo={handleEscolherArquivo} onAmpliar={setFotoAmpliada} carregando={carregandoId === p.id} />
+                <FotoThumb produto={p} onEscolherArquivo={handleEscolherArquivo} onAmpliar={(produto) => setFotoAmpliadaId(produto.id)} carregando={carregandoId === p.id} />
                 <div className="flex-1 min-w-0 flex items-center justify-between">
                   <div className="min-w-0">
                     <div className="font-medium text-ink truncate">
@@ -705,7 +749,9 @@ function EstoquePanel({ produtos, onFoto, onSaida, onTransferencia, locais, cria
         })}
       </div>
 
-      <FotoAmpliadaModal produto={fotoAmpliada} onFechar={() => setFotoAmpliada(null)} />
+      <FotoAmpliadaModal produto={produtoAmpliado} onFechar={() => setFotoAmpliadaId(null)}
+        onTrocarFoto={handleEscolherArquivo} onRemoverFoto={handleRemoverFoto}
+        carregando={carregandoId === fotoAmpliadaId} />
 
       {modal && (
         <MovimentacaoModal produto={modal.produto} tipo={modal.tipo} locais={locais} criarLocal={criarLocal}
@@ -723,7 +769,7 @@ function EstoquePanel({ produtos, onFoto, onSaida, onTransferencia, locais, cria
 let chaveCompra = 1
 const novaChaveCompra = () => String(chaveCompra++)
 
-function LinhaProduto({ produto, onAtualizar }) {
+function LinhaProduto({ produto, onAtualizar, onAmpliarFoto }) {
   const compras = comprasNormalizadas(produto.compras)
   const [linhas, setLinhas] = useState(() =>
     compras.linhas.length > 0
@@ -766,7 +812,10 @@ function LinhaProduto({ produto, onAtualizar }) {
         <input type="checkbox" className="w-5 h-5 rounded accent-primary shrink-0"
           checked={compras.desejado} onChange={() => persistir(linhas, !compras.desejado)} />
         {produto.foto ? (
-          <img src={produto.foto.thumb} alt={produto.itemNome} className="w-10 h-10 rounded-lg object-cover shrink-0 border border-line" />
+          <button type="button" onClick={onAmpliarFoto}
+            className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-line" aria-label="Ampliar foto">
+            <img src={produto.foto.thumb} alt={produto.itemNome} className="w-full h-full object-cover" />
+          </button>
         ) : (
           <div className="w-10 h-10 rounded-lg bg-line shrink-0" />
         )}
@@ -898,6 +947,8 @@ async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
 
 function ListaComprasPanel({ produtos, onAtualizar }) {
   const [filtro, setFiltro] = useState('todos')
+  const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
+  const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
   const visiveis = filtro === 'selecionados'
     ? produtos.filter((p) => comprasNormalizadas(p.compras).desejado)
     : produtos
@@ -964,8 +1015,13 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
         </div>
       )}
       <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
-        {visiveis.map((p) => <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar} />)}
+        {visiveis.map((p) => (
+          <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar}
+            onAmpliarFoto={() => setFotoAmpliadaId(p.id)} />
+        ))}
       </div>
+
+      <FotoAmpliadaModal produto={produtoAmpliado} onFechar={() => setFotoAmpliadaId(null)} />
     </div>
   )
 }
@@ -1315,7 +1371,7 @@ export default function App() {
   const {
     produtos, loading,
     registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada,
-    atualizarCompras, salvarFoto
+    atualizarCompras, salvarFoto, removerFoto
   } = useProdutos()
   const { movimentacoes, registrar, atualizar: atualizarMovimentacao } = useMovimentacoes()
 
@@ -1428,7 +1484,7 @@ export default function App() {
               onSalvar={handleSalvarEntrada} />
           )}
           {aba === 'estoque' && (
-            <EstoquePanel produtos={produtos} onFoto={salvarFoto}
+            <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
               onSaida={handleSaida} onTransferencia={handleTransferencia}
               locais={locaisHook.lista} criarLocal={locaisHook.adicionar} />
           )}
