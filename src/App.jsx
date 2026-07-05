@@ -4,9 +4,11 @@ import {
   query, orderBy, serverTimestamp, limit as fbLimit
 } from 'firebase/firestore'
 import { db } from './firebase.js'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import {
   Plus, Check, X, Pencil, Trash2, Package, ShoppingCart, Settings, Inbox,
-  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, Printer, Share2, Store
+  Camera, ClipboardList, ArrowLeftRight, LogOut, Loader2, FileDown, Share2, Store
 } from 'lucide-react'
 
 // ============================================================
@@ -231,23 +233,31 @@ function useProdutos() {
   }
 
   // Ajusta o estoque quando uma entrada já registrada é editada:
-  // remove a contribuição antiga (local/linhas de antes) e aplica a nova.
+  // remove a contribuição antiga (local/linhas de antes) e aplica a nova,
+  // considerando que "controlar estoque" também pode ter sido ligado/desligado.
   async function ajustarEdicaoEntrada(produto, movAntiga, novosDados) {
     let estoquePorLocal = produto.estoquePorLocal || {}
-    if (produto.controlarEstoque) {
+    const controlavaAntes = produto.controlarEstoque
+    const vaiControlarDepois = novosDados.controlarEstoque
+
+    if (controlavaAntes) {
       let listaAntiga = estoquePorLocal[movAntiga.local] || []
       ;(movAntiga.itens || []).forEach((v) => {
         listaAntiga = subtrairVariante(listaAntiga, v.peso, v.unidadePeso, v.unidades)
       })
       estoquePorLocal = { ...estoquePorLocal, [movAntiga.local]: listaAntiga }
+    }
 
+    if (vaiControlarDepois) {
       let listaNova = estoquePorLocal[novosDados.local] || []
       novosDados.linhas.forEach((l) => {
         listaNova = somarVariante(listaNova, l.peso, l.unidadePeso, l.unidades)
       })
       estoquePorLocal = { ...estoquePorLocal, [novosDados.local]: listaNova }
     }
+
     return updateDoc(doc(db, PRODUTOS_COLLECTION, produto.id), {
+      controlarEstoque: vaiControlarDepois,
       estoquePorLocal,
       atualizadoEm: serverTimestamp()
     })
@@ -814,6 +824,78 @@ function gerarTextoWhatsApp(selecionados) {
   return `🛒 *Lista de compras — Mercado Inteligente*\n${formatarData(hojeISO())}\n\n${linhas.join('\n\n')}`
 }
 
+function gerarPdfCompras(selecionados) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const margem = 14
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(16)
+  doc.text('Lista de compras — Mercado Inteligente', margem, 18)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  doc.setTextColor(120)
+  doc.text(formatarData(hojeISO()), margem, 24)
+  doc.setTextColor(0)
+
+  autoTable(doc, {
+    startY: 30,
+    head: [['', 'Foto', 'Produto', 'Quantidade']],
+    body: selecionados.map(({ produto, compras }) => [
+      '', '',
+      `${produto.itemNome} — ${produto.marcaNome}\n${produto.secaoNome}`,
+      linhasQuantidadeFormatadas(compras.linhas).join('\n') || '—'
+    ]),
+    styles: { font: 'helvetica', fontSize: 10, cellPadding: 3, valign: 'middle', minCellHeight: 12 },
+    headStyles: { fillColor: [47, 129, 69], textColor: 255 },
+    columnStyles: {
+      0: { cellWidth: 10 },
+      1: { cellWidth: 16 },
+      2: { cellWidth: 'auto' },
+      3: { cellWidth: 42 }
+    },
+    didDrawCell: (data) => {
+      if (data.section !== 'body') return
+      const { x, y, width, height } = data.cell
+      if (data.column.index === 0) {
+        const tam = 4.5
+        doc.setDrawColor(120)
+        doc.rect(x + width / 2 - tam / 2, y + height / 2 - tam / 2, tam, tam)
+      }
+      if (data.column.index === 1) {
+        const produto = selecionados[data.row.index]?.produto
+        if (produto?.foto?.thumb) {
+          try {
+            const tamImg = Math.min(width, height) - 3
+            doc.addImage(produto.foto.thumb, 'JPEG', x + (width - tamImg) / 2, y + (height - tamImg) / 2, tamImg, tamImg)
+          } catch (e) { /* miniatura inválida, ignora */ }
+        }
+      }
+    }
+  })
+
+  return doc
+}
+
+// Tenta compartilhar o PDF direto (funciona em navegadores/celulares com suporte
+// ao compartilhamento nativo de arquivos). Se não suportar, baixa o PDF e abre
+// o WhatsApp com o texto pronto, pra anexar manualmente.
+async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
+  if (navigator.canShare) {
+    try {
+      const blob = doc.output('blob')
+      const arquivo = new File([blob], nomeArquivo, { type: 'application/pdf' })
+      if (navigator.canShare({ files: [arquivo] })) {
+        await navigator.share({ files: [arquivo], title: 'Lista de compras — Mercado Inteligente', text: textoWhats })
+        return
+      }
+    } catch (err) {
+      // cancelado pelo usuário ou não suportado — segue pro fallback abaixo
+    }
+  }
+  doc.save(nomeArquivo)
+  window.open('https://wa.me/?text=' + encodeURIComponent(textoWhats), '_blank', 'noopener,noreferrer')
+}
+
 function ListaComprasPanel({ produtos, onAtualizar }) {
   const [filtro, setFiltro] = useState('todos')
   const visiveis = filtro === 'selecionados'
@@ -825,30 +907,18 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
     .filter((x) => x.compras.desejado)
   const totalSel = selecionados.length
 
-  const linkWhatsApp = 'https://wa.me/?text=' + encodeURIComponent(gerarTextoWhatsApp(selecionados))
+  function handleBaixarPdf() {
+    const doc = gerarPdfCompras(selecionados)
+    doc.save('lista-de-compras.pdf')
+  }
 
-  function handleWhatsApp() {
-    window.print()
-    setTimeout(() => {
-      window.open(linkWhatsApp, '_blank', 'noopener,noreferrer')
-    }, 400)
+  async function handleWhatsApp() {
+    const doc = gerarPdfCompras(selecionados)
+    await compartilharOuBaixarPdf(doc, 'lista-de-compras.pdf', gerarTextoWhatsApp(selecionados))
   }
 
   return (
     <div className="px-4 pt-4 pb-28">
-      <style>{`
-        #area-impressao { display: none; }
-        @media print {
-          @page { size: A4; margin: 18mm; }
-          body * { visibility: hidden; }
-          #area-impressao, #area-impressao * { visibility: visible; }
-          #area-impressao { display: block; position: absolute; left: 0; top: 0; width: 100%; }
-          #area-impressao table { border-collapse: collapse; width: 100%; }
-          #area-impressao thead { display: table-header-group; }
-          #area-impressao tr { break-inside: avoid; page-break-inside: avoid; }
-        }
-      `}</style>
-
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-display font-semibold text-ink md:hidden">Lista de compras</h2>
         {totalSel > 0 && (
@@ -872,17 +942,17 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
       {totalSel > 0 && (
         <div className="mb-4">
           <div className="flex gap-2">
-            <button onClick={() => window.print()}
+            <button onClick={handleBaixarPdf}
               className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-ink text-white">
-              <Printer size={15} /> Imprimir / PDF (A4)
+              <FileDown size={15} /> Baixar PDF (A4)
             </button>
             <button onClick={handleWhatsApp}
               className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary text-white">
-              <Share2 size={15} /> Gerar PDF e enviar
+              <Share2 size={15} /> Enviar no WhatsApp
             </button>
           </div>
           <p className="text-[11px] text-muted mt-1.5 text-center">
-            O WhatsApp não deixa anexar arquivo automaticamente: esse botão abre o PDF pra você salvar e, em seguida, abre o WhatsApp com o texto pronto — é só anexar o PDF salvo na conversa.
+            No celular, "Enviar no WhatsApp" já abre com o PDF anexado. Se o aparelho não suportar, ele baixa o PDF e abre o WhatsApp pra você anexar na conversa.
           </p>
         </div>
       )}
@@ -895,47 +965,6 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
       )}
       <div className="flex flex-col gap-2 md:grid md:grid-cols-2 md:gap-3 md:items-start">
         {visiveis.map((p) => <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar} />)}
-      </div>
-
-      {/* Área de impressão A4 — só aparece na impressão/PDF */}
-      <div id="area-impressao">
-        <h1 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>Lista de compras — Mercado Inteligente</h1>
-        <p style={{ fontSize: '13px', color: '#666', marginBottom: '18px' }}>{formatarData(hojeISO())}</p>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: 'left', borderBottom: '2px solid #333', padding: '6px 4px', width: '36px' }}></th>
-              <th style={{ textAlign: 'left', borderBottom: '2px solid #333', padding: '6px 4px', width: '56px' }}>Foto</th>
-              <th style={{ textAlign: 'left', borderBottom: '2px solid #333', padding: '6px 4px' }}>Produto</th>
-              <th style={{ textAlign: 'left', borderBottom: '2px solid #333', padding: '6px 4px' }}>Quantidade</th>
-            </tr>
-          </thead>
-          <tbody>
-            {selecionados.map(({ produto, compras }) => (
-              <tr key={produto.id}>
-                <td style={{ borderBottom: '1px solid #ddd', padding: '8px 4px', verticalAlign: 'middle' }}>
-                  <span style={{ display: 'inline-block', width: '16px', height: '16px', border: '1.5px solid #555', borderRadius: '3px' }}></span>
-                </td>
-                <td style={{ borderBottom: '1px solid #ddd', padding: '8px 4px', verticalAlign: 'middle' }}>
-                  {produto.foto ? (
-                    <img src={produto.foto.thumb} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />
-                  ) : null}
-                </td>
-                <td style={{ borderBottom: '1px solid #ddd', padding: '8px 4px', verticalAlign: 'middle' }}>
-                  <strong>{produto.itemNome}</strong> — {produto.marcaNome}
-                  <div style={{ fontSize: '11px', color: '#888' }}>{produto.secaoNome}</div>
-                </td>
-                <td style={{ borderBottom: '1px solid #ddd', padding: '8px 4px', verticalAlign: 'middle' }}>
-                  {linhasQuantidadeFormatadas(compras.linhas).length > 0
-                    ? linhasQuantidadeFormatadas(compras.linhas).map((linha, i) => (
-                        <div key={i}>{linha}</div>
-                      ))
-                    : '—'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   )
@@ -957,6 +986,7 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
   const [preco, setPreco] = useState(movimentacao.preco != null ? String(movimentacao.preco) : '')
   const [data, setData] = useState(movimentacao.data || hojeISO())
   const [localId, setLocalId] = useState(() => locais.find((l) => l.nome === movimentacao.local)?.id || '')
+  const [controlarEstoque, setControlarEstoque] = useState(produto?.controlarEstoque ?? true)
   const [salvando, setSalvando] = useState(false)
 
   function atualizarLinha(key, campo, valor) {
@@ -979,7 +1009,8 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
         linhas: linhasNormalizadas,
         local: localSel.nome,
         data,
-        preco: preco === '' ? null : Number(preco)
+        preco: preco === '' ? null : Number(preco),
+        controlarEstoque
       })
     } finally {
       setSalvando(false)
@@ -1036,8 +1067,14 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
 
         <SelectWithQuickAdd label="Local" valor={localId} onChange={setLocalId} opcoes={locais} onCriar={criarLocal} />
 
+        <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
+          <input type="checkbox" className="w-5 h-5 rounded accent-primary"
+            checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
+          <span className="text-sm text-ink">Controlar estoque deste item</span>
+        </label>
+
         <p className="text-[11px] text-muted mb-3">
-          O estoque é ajustado automaticamente: o que essa entrada tinha somado é removido e o novo valor é aplicado no lugar.
+          O estoque é ajustado automaticamente: o que essa entrada tinha somado é removido e o novo valor é aplicado no lugar. Desmarcar aqui também para de contar o estoque deste produto a partir de agora.
         </p>
 
         <div className="flex gap-2 mt-2">
