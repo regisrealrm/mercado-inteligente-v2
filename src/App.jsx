@@ -319,7 +319,14 @@ function useProdutos() {
     return deleteDoc(doc(db, PRODUTOS_COLLECTION, produtoId))
   }
 
-  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto, removerFoto, removerProduto }
+  async function atualizarCadastro(produtoId, dados) {
+    return updateDoc(doc(db, PRODUTOS_COLLECTION, produtoId), {
+      ...dados,
+      atualizadoEm: serverTimestamp()
+    })
+  }
+
+  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro }
 }
 
 const MOVIMENTACOES_COLLECTION = 'movimentacoes'
@@ -717,6 +724,58 @@ function MovimentacaoModal({ produto, tipo, locais, criarLocal, onConfirmar, onF
   )
 }
 
+function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, temEntradaRecente, onAbrirEdicaoEntrada, onConfirmar, onFechar }) {
+  const [secaoId, setSecaoId] = useState(produto.secaoId || '')
+  const [itemId, setItemId] = useState(produto.itemId || '')
+  const [marcaId, setMarcaId] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaId || ''))
+  const [controlarEstoque, setControlarEstoque] = useState(!!produto.controlarEstoque)
+  const [salvando, setSalvando] = useState(false)
+
+  async function confirmar() {
+    if (!secaoId || !itemId || salvando) return
+    setSalvando(true)
+    try {
+      await onConfirmar({ secaoId, itemId, marcaId, controlarEstoque })
+    } finally {
+      setSalvando(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <h2 className="text-lg font-semibold mb-1">Editar cadastro</h2>
+        <p className="text-sm text-muted mb-4">{produto.itemNome} — {produto.marcaNome}</p>
+
+        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
+        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
+
+        <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
+          <input type="checkbox" className="w-5 h-5 rounded accent-primary"
+            checked={controlarEstoque} onChange={(e) => setControlarEstoque(e.target.checked)} />
+          <span className="text-sm text-ink">Controlar estoque deste item</span>
+        </label>
+
+        <div className="flex gap-2 mb-3">
+          <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
+          <button disabled={!secaoId || !itemId || salvando} onClick={confirmar} className="btn-primary flex-1 disabled:opacity-40">
+            {salvando ? 'Salvando...' : 'Salvar'}
+          </button>
+        </div>
+
+        {temEntradaRecente && (
+          <button type="button" onClick={onAbrirEdicaoEntrada}
+            className="w-full text-center text-xs font-medium text-primary-dark underline underline-offset-2">
+            Editar também peso, local, data e preço da última entrada
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar }) {
   const [excluindo, setExcluindo] = useState(false)
   if (!produto) return null
@@ -748,7 +807,7 @@ function ConfirmarExclusaoModal({ produto, qtdMovimentos, onConfirmar, onFechar 
   )
 }
 
-function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, movimentacoes, onEditarEntrada, onExcluirProduto }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, criarSecao, criarItem, criarMarca, movimentacoes, onEditarEntrada, onEditarProduto, onExcluirProduto }) {
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -760,6 +819,7 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
   const [modal, setModal] = useState(null)
   const [editandoEntrada, setEditandoEntrada] = useState(null)
+  const [editandoProduto, setEditandoProduto] = useState(null)
   const [excluindoProduto, setExcluindoProduto] = useState(null)
 
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
@@ -772,6 +832,18 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
 
   function contarMovimentos(produtoId) {
     return movimentacoes.filter((m) => m.produtoId === produtoId).length
+  }
+
+  async function handleEditarProduto(produtoId, dados) {
+    const secao = secoes.find((s) => s.id === dados.secaoId)
+    const item = itens.find((i) => i.id === dados.itemId)
+    const marca = marcas.find((m) => m.id === dados.marcaId)
+    await onEditarProduto(produtoId, {
+      secaoId: dados.secaoId, secaoNome: secao?.nome || '',
+      itemId: dados.itemId, itemNome: item?.nome || '',
+      marcaId: dados.marcaId || 'sem-marca', marcaNome: marca?.nome || 'Sem marca',
+      controlarEstoque: dados.controlarEstoque
+    })
   }
 
   async function handleEscolherArquivo(produtoId, file) {
@@ -841,9 +913,9 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
                   className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-warn-light text-warn disabled:opacity-40">
                   <ArrowLeftRight size={12} /> Transferir
                 </button>
-                <button disabled={!entradaRecente} onClick={() => setEditandoEntrada({ movimentacao: entradaRecente, produto: p })}
-                  title="Editar última entrada" aria-label="Editar última entrada"
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted disabled:opacity-30">
+                <button onClick={() => setEditandoProduto(p)}
+                  title="Editar cadastro" aria-label="Editar cadastro"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
                   <Pencil size={12} />
                 </button>
                 <button onClick={() => setExcluindoProduto(p)}
@@ -881,6 +953,24 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
           onConfirmar={async (dados) => {
             await onEditarEntrada(editandoEntrada.movimentacao, dados)
             setEditandoEntrada(null)
+          }} />
+      )}
+
+      {editandoProduto && (
+        <EditarProdutoModal
+          produto={editandoProduto}
+          secoes={secoes} itens={itens} marcas={marcas}
+          criarSecao={criarSecao} criarItem={criarItem} criarMarca={criarMarca}
+          temEntradaRecente={!!ultimaEntrada(editandoProduto.id)}
+          onAbrirEdicaoEntrada={() => {
+            const mov = ultimaEntrada(editandoProduto.id)
+            setEditandoEntrada({ movimentacao: mov, produto: editandoProduto })
+            setEditandoProduto(null)
+          }}
+          onFechar={() => setEditandoProduto(null)}
+          onConfirmar={async (dados) => {
+            await handleEditarProduto(editandoProduto.id, dados)
+            setEditandoProduto(null)
           }} />
       )}
 
@@ -1628,7 +1718,7 @@ export default function App() {
   const {
     produtos, loading,
     registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada,
-    atualizarCompras, salvarFoto, removerFoto, removerProduto
+    atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro
   } = useProdutos()
   const { movimentacoes, registrar, atualizar: atualizarMovimentacao, removerPorProduto } = useMovimentacoes()
 
@@ -1752,7 +1842,9 @@ export default function App() {
               onSaida={handleSaida} onTransferencia={handleTransferencia}
               locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
+              criarSecao={secoesHook.adicionar} criarItem={itensHook.adicionar} criarMarca={marcasHook.adicionar}
               movimentacoes={movimentacoes} onEditarEntrada={handleEditarEntrada}
+              onEditarProduto={atualizarCadastro}
               onExcluirProduto={handleExcluirProduto} />
           )}
           {aba === 'compras' && (
