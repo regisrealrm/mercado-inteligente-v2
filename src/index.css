@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-base text-ink font-sans antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+*:focus-visible {
+  outline: 2px solid theme('colors.primary.DEFAULT');
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.card {
+  @apply bg-surface rounded-2xl border border-line shadow-sm;
+}
+
+.card-accent {
+  @apply relative overflow-hidden pl-4;
+}
+
+.card-accent::before {
+  content: '';
+  @apply absolute left-0 top-0 bottom-0 w-1;
+  background: var(--accent-stripe, theme('colors.primary.DEFAULT'));
+}
+
+.btn-primary {
+  @apply bg-primary text-white rounded-xl px-4 py-2.5 font-medium active:scale-[0.98] transition shadow-sm shadow-primary/20;
+}
+
+.btn-secondary {
+  @apply bg-surface border border-line text-ink rounded-xl px-4 py-2.5 font-medium active:scale-[0.98] transition;
+}
+
+.chip {
+  @apply px-3 py-1.5 rounded-full text-sm font-medium border transition;
+}
+
+/* Etiqueta de feira: selo de seção com recorte serrilhado, como uma etiqueta de preço */
+.tag-feira {
+  @apply inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-md;
+  background-image:
+    radial-gradient(circle at 4px 0px, transparent 3px, currentColor 3.5px, currentColor 0),
+    radial-gradient(circle at 4px 100%, transparent 3px, currentColor 3.5px, currentColor 0);
+  background-size: 8px 4px;
+  background-repeat: repeat-x;
+  background-position: top left, bottom left;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.font-display {
+  @apply font-display tracking-tight;
+}
+
+.app-shell {
+  @apply mx-auto w-full max-w-md md:max-w-4xl lg:max-w-5xl;
+}
