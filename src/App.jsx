@@ -71,17 +71,16 @@ function comprasNormalizadas(compras) {
   return { desejado: !!compras?.desejado, linhas: [] }
 }
 
-function descricaoLinhasCompra(linhas) {
-  if (!linhas || linhas.length === 0) return ''
-  return linhas
-    .map((l) => {
-      const partes = []
-      if (l.peso > 0) partes.push(`${l.peso} ${l.unidadePeso}`)
-      if (l.unidades > 0) partes.push(`${l.unidades} un`)
-      return partes.join(' × ')
-    })
-    .filter(Boolean)
-    .join('  ·  ')
+function formatarLinhaQuantidade(l) {
+  const partes = []
+  if (l.unidades > 0) partes.push(`${l.unidades} un`)
+  if (l.peso > 0) partes.push(`${l.peso} ${l.unidadePeso}`)
+  return partes.join(' × ')
+}
+
+function linhasQuantidadeFormatadas(linhas) {
+  if (!linhas || linhas.length === 0) return []
+  return linhas.map(formatarLinhaQuantidade).filter(Boolean)
 }
 
 function comprimirImagem(file, maxLargura, qualidade) {
@@ -231,6 +230,29 @@ function useProdutos() {
     })
   }
 
+  // Ajusta o estoque quando uma entrada já registrada é editada:
+  // remove a contribuição antiga (local/linhas de antes) e aplica a nova.
+  async function ajustarEdicaoEntrada(produto, movAntiga, novosDados) {
+    let estoquePorLocal = produto.estoquePorLocal || {}
+    if (produto.controlarEstoque) {
+      let listaAntiga = estoquePorLocal[movAntiga.local] || []
+      ;(movAntiga.itens || []).forEach((v) => {
+        listaAntiga = subtrairVariante(listaAntiga, v.peso, v.unidadePeso, v.unidades)
+      })
+      estoquePorLocal = { ...estoquePorLocal, [movAntiga.local]: listaAntiga }
+
+      let listaNova = estoquePorLocal[novosDados.local] || []
+      novosDados.linhas.forEach((l) => {
+        listaNova = somarVariante(listaNova, l.peso, l.unidadePeso, l.unidades)
+      })
+      estoquePorLocal = { ...estoquePorLocal, [novosDados.local]: listaNova }
+    }
+    return updateDoc(doc(db, PRODUTOS_COLLECTION, produto.id), {
+      estoquePorLocal,
+      atualizadoEm: serverTimestamp()
+    })
+  }
+
   async function atualizarCompras(produtoId, compras) {
     return updateDoc(doc(db, PRODUTOS_COLLECTION, produtoId), {
       compras,
@@ -246,7 +268,7 @@ function useProdutos() {
     })
   }
 
-  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, atualizarCompras, salvarFoto }
+  return { produtos, loading, registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada, atualizarCompras, salvarFoto }
 }
 
 const MOVIMENTACOES_COLLECTION = 'movimentacoes'
@@ -271,7 +293,14 @@ function useMovimentacoes() {
     })
   }
 
-  return { movimentacoes, loading, registrar }
+  async function atualizar(movId, dados) {
+    return updateDoc(doc(db, MOVIMENTACOES_COLLECTION, movId), {
+      ...dados,
+      atualizadoEm: serverTimestamp()
+    })
+  }
+
+  return { movimentacoes, loading, registrar, atualizar }
 }
 
 // ============================================================
@@ -778,10 +807,11 @@ function LinhaProduto({ produto, onAtualizar }) {
 
 function gerarTextoWhatsApp(selecionados) {
   const linhas = selecionados.map(({ produto, compras }) => {
-    const det = descricaoLinhasCompra(compras.linhas)
-    return `▫️ ${produto.itemNome} — ${produto.marcaNome}${det ? `: ${det}` : ''}`
+    const dets = linhasQuantidadeFormatadas(compras.linhas)
+    const detalheTexto = dets.length > 0 ? `\n   ${dets.join('\n   ')}` : ''
+    return `▫️ ${produto.itemNome} — ${produto.marcaNome}${detalheTexto}`
   })
-  return `🛒 *Lista de compras — Mercado Inteligente*\n${formatarData(hojeISO())}\n\n${linhas.join('\n')}`
+  return `🛒 *Lista de compras — Mercado Inteligente*\n${formatarData(hojeISO())}\n\n${linhas.join('\n\n')}`
 }
 
 function ListaComprasPanel({ produtos, onAtualizar }) {
@@ -797,6 +827,13 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
 
   const linkWhatsApp = 'https://wa.me/?text=' + encodeURIComponent(gerarTextoWhatsApp(selecionados))
 
+  function handleWhatsApp() {
+    window.print()
+    setTimeout(() => {
+      window.open(linkWhatsApp, '_blank', 'noopener,noreferrer')
+    }, 400)
+  }
+
   return (
     <div className="px-4 pt-4 pb-28">
       <style>{`
@@ -806,6 +843,9 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
           body * { visibility: hidden; }
           #area-impressao, #area-impressao * { visibility: visible; }
           #area-impressao { display: block; position: absolute; left: 0; top: 0; width: 100%; }
+          #area-impressao table { border-collapse: collapse; width: 100%; }
+          #area-impressao thead { display: table-header-group; }
+          #area-impressao tr { break-inside: avoid; page-break-inside: avoid; }
         }
       `}</style>
 
@@ -830,15 +870,20 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
       </div>
 
       {totalSel > 0 && (
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => window.print()}
-            className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-ink text-white">
-            <Printer size={15} /> Imprimir / PDF (A4)
-          </button>
-          <a href={linkWhatsApp} target="_blank" rel="noopener noreferrer"
-            className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary text-white">
-            <Share2 size={15} /> Enviar no WhatsApp
-          </a>
+        <div className="mb-4">
+          <div className="flex gap-2">
+            <button onClick={() => window.print()}
+              className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-ink text-white">
+              <Printer size={15} /> Imprimir / PDF (A4)
+            </button>
+            <button onClick={handleWhatsApp}
+              className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary text-white">
+              <Share2 size={15} /> Gerar PDF e enviar
+            </button>
+          </div>
+          <p className="text-[11px] text-muted mt-1.5 text-center">
+            O WhatsApp não deixa anexar arquivo automaticamente: esse botão abre o PDF pra você salvar e, em seguida, abre o WhatsApp com o texto pronto — é só anexar o PDF salvo na conversa.
+          </p>
         </div>
       )}
 
@@ -881,7 +926,11 @@ function ListaComprasPanel({ produtos, onAtualizar }) {
                   <div style={{ fontSize: '11px', color: '#888' }}>{produto.secaoNome}</div>
                 </td>
                 <td style={{ borderBottom: '1px solid #ddd', padding: '8px 4px', verticalAlign: 'middle' }}>
-                  {descricaoLinhasCompra(compras.linhas) || '—'}
+                  {linhasQuantidadeFormatadas(compras.linhas).length > 0
+                    ? linhasQuantidadeFormatadas(compras.linhas).map((linha, i) => (
+                        <div key={i}>{linha}</div>
+                      ))
+                    : '—'}
                 </td>
               </tr>
             ))}
@@ -899,8 +948,112 @@ function descreverItensMovimento(m) {
   return ''
 }
 
-function RelatoriosPanel({ movimentacoes, produtos }) {
+function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfirmar, onFechar }) {
+  const [linhas, setLinhas] = useState(() =>
+    movimentacao.itens && movimentacao.itens.length > 0
+      ? movimentacao.itens.map((l) => ({ key: novaChaveLinha(), peso: l.peso || '', unidadePeso: l.unidadePeso || 'kg', unidades: l.unidades || '' }))
+      : [linhaVazia()]
+  )
+  const [preco, setPreco] = useState(movimentacao.preco != null ? String(movimentacao.preco) : '')
+  const [data, setData] = useState(movimentacao.data || hojeISO())
+  const [localId, setLocalId] = useState(() => locais.find((l) => l.nome === movimentacao.local)?.id || '')
+  const [salvando, setSalvando] = useState(false)
+
+  function atualizarLinha(key, campo, valor) {
+    setLinhas((prev) => prev.map((l) => (l.key === key ? { ...l, [campo]: valor } : l)))
+  }
+
+  async function confirmar() {
+    const localSel = locais.find((l) => l.id === localId)
+    if (!localSel || salvando) return
+    setSalvando(true)
+    try {
+      const linhasNormalizadas = linhas
+        .map((l) => ({
+          peso: l.peso === '' ? 0 : Number(l.peso),
+          unidadePeso: l.unidadePeso,
+          unidades: l.unidades === '' ? 0 : Number(l.unidades)
+        }))
+        .filter((l) => l.peso > 0 || l.unidades > 0)
+      await onConfirmar({
+        linhas: linhasNormalizadas,
+        local: localSel.nome,
+        data,
+        preco: preco === '' ? null : Number(preco)
+      })
+    } finally {
+      setSalvando(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <h2 className="text-lg font-semibold mb-1">Editar entrada</h2>
+        <p className="text-sm text-muted mb-4">{produto ? `${produto.itemNome} — ${produto.marcaNome}` : 'Item removido'}</p>
+
+        <div className="mb-1 flex items-center justify-between">
+          <label className="text-sm text-muted">Pesos e quantidades</label>
+          <button type="button" onClick={() => setLinhas((prev) => [...prev, linhaVazia()])}
+            className="text-xs font-medium text-primary-dark bg-primary-light px-2.5 py-1 rounded-lg flex items-center gap-1">
+            <Plus size={13} /> Adicionar peso
+          </button>
+        </div>
+        {linhas.map((l) => (
+          <div key={l.key} className="flex gap-2 mb-2 items-center">
+            <input type="number" step="0.01"
+              className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-base"
+              value={l.peso} onChange={(e) => atualizarLinha(l.key, 'peso', e.target.value)} placeholder="Peso" />
+            <select className="w-16 px-1 py-2 rounded-xl border border-line bg-base text-sm"
+              value={l.unidadePeso} onChange={(e) => atualizarLinha(l.key, 'unidadePeso', e.target.value)}>
+              {UNIDADES_PESO.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+            <input type="number"
+              className="w-20 px-3 py-2 rounded-xl border border-line bg-base"
+              value={l.unidades} onChange={(e) => atualizarLinha(l.key, 'unidades', e.target.value)} placeholder="Un" />
+            {linhas.length > 1 && (
+              <button type="button" onClick={() => setLinhas((prev) => prev.filter((x) => x.key !== l.key))}
+                className="text-danger p-1 shrink-0">
+                <Trash2 size={16} />
+              </button>
+            )}
+          </div>
+        ))}
+
+        <div className="mb-3 mt-2">
+          <label className="text-sm text-muted">Preço pago (R$) — opcional</label>
+          <input type="number" step="0.01"
+            className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
+            value={preco} onChange={(e) => setPreco(e.target.value)} placeholder="0,00" />
+        </div>
+
+        <div className="mb-3">
+          <label className="text-sm text-muted">Data da entrada</label>
+          <input type="date" className="w-full mt-1 px-3 py-2 rounded-xl border border-line bg-base"
+            value={data} onChange={(e) => setData(e.target.value)} />
+        </div>
+
+        <SelectWithQuickAdd label="Local" valor={localId} onChange={setLocalId} opcoes={locais} onCriar={criarLocal} />
+
+        <p className="text-[11px] text-muted mb-3">
+          O estoque é ajustado automaticamente: o que essa entrada tinha somado é removido e o novo valor é aplicado no lugar.
+        </p>
+
+        <div className="flex gap-2 mt-2">
+          <button className="btn-secondary flex-1" onClick={onFechar}>Cancelar</button>
+          <button disabled={salvando || !localId} onClick={confirmar} className="btn-primary flex-1 disabled:opacity-40">
+            {salvando ? 'Salvando...' : 'Salvar alterações'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditarEntrada }) {
   const [filtro, setFiltro] = useState('todos')
+  const [editando, setEditando] = useState(null)
 
   const produtoPorId = useMemo(() => {
     const mapa = {}
@@ -953,7 +1106,14 @@ function RelatoriosPanel({ movimentacoes, produtos }) {
             <div key={m.id} className="card card-accent p-3" style={{ '--accent-stripe': estilo.stripe }}>
               <div className="flex items-center justify-between mb-1">
                 <span className={'text-[11px] font-semibold px-2 py-0.5 rounded-full ' + estilo.cor}>{estilo.label}</span>
-                <span className="text-xs text-muted">{formatarData(m.data)}</span>
+                <div className="flex items-center gap-2">
+                  {m.tipo === 'entrada' && (
+                    <button onClick={() => setEditando(m)} className="text-muted hover:text-primary-dark p-0.5" aria-label="Editar entrada">
+                      <Pencil size={13} />
+                    </button>
+                  )}
+                  <span className="text-xs text-muted">{formatarData(m.data)}</span>
+                </div>
               </div>
               <div className="font-medium text-ink">
                 {produto ? `${produto.itemNome} — ${produto.marcaNome}` : 'Item removido'}
@@ -967,6 +1127,19 @@ function RelatoriosPanel({ movimentacoes, produtos }) {
           )
         })}
       </div>
+
+      {editando && (
+        <EditarEntradaModal
+          movimentacao={editando}
+          produto={produtoPorId[editando.produtoId]}
+          locais={locais}
+          criarLocal={criarLocal}
+          onFechar={() => setEditando(null)}
+          onConfirmar={async (dados) => {
+            await onEditarEntrada(editando, dados)
+            setEditando(null)
+          }} />
+      )}
     </div>
   )
 }
@@ -1104,10 +1277,10 @@ export default function App() {
   const locaisHook = useMasterList('locais')
   const {
     produtos, loading,
-    registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia,
+    registrarEntradaNoProduto, aplicarSaida, aplicarTransferencia, ajustarEdicaoEntrada,
     atualizarCompras, salvarFoto
   } = useProdutos()
-  const { movimentacoes, registrar } = useMovimentacoes()
+  const { movimentacoes, registrar, atualizar: atualizarMovimentacao } = useMovimentacoes()
 
   async function handleSalvarEntrada(dados) {
     const secao = secoesHook.lista.find((s) => s.id === dados.secaoId)
@@ -1135,6 +1308,19 @@ export default function App() {
       })
     }
   }
+
+  async function handleEditarEntrada(movAntiga, dadosNovos) {
+    const produto = produtos.find((p) => p.id === movAntiga.produtoId)
+    if (!produto) return
+    await ajustarEdicaoEntrada(produto, movAntiga, dadosNovos)
+    await atualizarMovimentacao(movAntiga.id, {
+      itens: dadosNovos.linhas,
+      local: dadosNovos.local,
+      data: dadosNovos.data,
+      preco: dadosNovos.preco
+    })
+  }
+
 
   async function handleSaida(dados) {
     const produto = produtos.find((p) => p.id === dados.produtoId)
@@ -1210,7 +1396,11 @@ export default function App() {
               locais={locaisHook.lista} criarLocal={locaisHook.adicionar} />
           )}
           {aba === 'compras' && <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras} />}
-          {aba === 'relatorios' && <RelatoriosPanel movimentacoes={movimentacoes} produtos={produtos} />}
+          {aba === 'relatorios' && (
+            <RelatoriosPanel movimentacoes={movimentacoes} produtos={produtos}
+              locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
+              onEditarEntrada={handleEditarEntrada} />
+          )}
           {aba === 'ajustes' && (
             <AjustesPanel secoesHook={secoesHook} itensHook={itensHook} marcasHook={marcasHook} locaisHook={locaisHook} />
           )}
