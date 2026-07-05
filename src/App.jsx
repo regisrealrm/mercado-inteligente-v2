@@ -66,6 +66,7 @@ function locaisComEstoque(produto) {
   return Object.entries(produto.estoquePorLocal || {})
     .map(([nome, variantes]) => ({ nome, variantes: (variantes || []).filter((v) => v.unidades > 0) }))
     .filter((l) => l.variantes.length > 0)
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
 }
 
 // Busca o nome atual de uma seção/item/marca pelo id, com fallback pro nome
@@ -151,7 +152,9 @@ function useMasterList(collectionName) {
   useEffect(() => {
     const q = query(collection(db, collectionName), orderBy('nome', 'asc'))
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setLista(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })))
+      const dados = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+      dados.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }))
+      setLista(dados)
       setLoading(false)
     })
     return () => unsubscribe()
@@ -702,7 +705,7 @@ function MovimentacaoModal({ produto, tipo, locais, criarLocal, onConfirmar, onF
   )
 }
 
-function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida, onTransferencia, locais, criarLocal, secoes, itens, marcas, movimentacoes, onEditarEntrada }) {
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -714,8 +717,15 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
   const [carregandoId, setCarregandoId] = useState(null)
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
   const [modal, setModal] = useState(null)
+  const [editandoEntrada, setEditandoEntrada] = useState(null)
 
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
+
+  function ultimaEntrada(produtoId) {
+    return movimentacoes
+      .filter((m) => m.tipo === 'entrada' && m.produtoId === produtoId)
+      .sort((a, b) => (b.data || '').localeCompare(a.data || ''))[0] || null
+  }
 
   async function handleEscolherArquivo(produtoId, file) {
     setCarregandoId(produtoId)
@@ -746,6 +756,7 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
           const totalUn = totalUnidadesProduto(p)
           const porLocal = locaisComEstoque(p)
           const temEstoque = totalUn > 0
+          const entradaRecente = ultimaEntrada(p.id)
           return (
             <div key={p.id} className="card card-accent p-2.5" style={{ '--accent-stripe': temEstoque ? '#2F8145' : '#D6472A' }}>
               <div className="flex items-center gap-2.5">
@@ -783,6 +794,11 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
                   className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-warn-light text-warn disabled:opacity-40">
                   <ArrowLeftRight size={12} /> Transferir
                 </button>
+                <button disabled={!entradaRecente} onClick={() => setEditandoEntrada({ movimentacao: entradaRecente, produto: p })}
+                  title="Editar última entrada" aria-label="Editar última entrada"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted disabled:opacity-30">
+                  <Pencil size={12} />
+                </button>
               </div>
             </div>
           )
@@ -802,6 +818,19 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, onSaida
             setModal(null)
           }} />
       )}
+
+      {editandoEntrada && (
+        <EditarEntradaModal
+          movimentacao={editandoEntrada.movimentacao}
+          produto={editandoEntrada.produto}
+          locais={locais}
+          criarLocal={criarLocal}
+          onFechar={() => setEditandoEntrada(null)}
+          onConfirmar={async (dados) => {
+            await onEditarEntrada(editandoEntrada.movimentacao, dados)
+            setEditandoEntrada(null)
+          }} />
+      )}
     </div>
   )
 }
@@ -817,6 +846,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
       : [{ key: novaChaveCompra(), peso: '', unidadePeso: 'kg', unidades: '' }]
   )
   const [compradorId, setCompradorId] = useState(() => compradores.find((c) => c.nome === compras.compradorNome)?.id || '')
+  const [aberto, setAberto] = useState(false)
   const variantes = variantesConhecidas(produto)
 
   function salvar(patch) {
@@ -834,6 +864,12 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
         }))
         .filter((l) => l.peso > 0 || l.unidades > 0)
     })
+  }
+
+  function alternarDesejado() {
+    const novoDesejado = !compras.desejado
+    salvar({ desejado: novoDesejado })
+    setAberto(novoDesejado)
   }
 
   function atualizarLinha(key, campo, valor) {
@@ -871,11 +907,13 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
     salvar({ compradorId: id, compradorNome: comprador?.nome || '' })
   }
 
+  const resumoQuantidade = linhasQuantidadeFormatadas(compras.linhas).join(' · ')
+
   return (
     <div className={'card p-2.5 ' + (compras.comprado ? 'opacity-55' : compras.desejado ? 'ring-1 ring-primary border-primary' : '')}>
       <div className="flex items-center gap-2.5">
         <input type="checkbox" className="w-4.5 h-4.5 rounded accent-primary shrink-0"
-          checked={compras.desejado} onChange={() => salvar({ desejado: !compras.desejado })} />
+          checked={compras.desejado} onChange={alternarDesejado} />
         {produto.foto ? (
           <button type="button" onClick={onAmpliarFoto}
             className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-line" aria-label="Ampliar foto">
@@ -895,7 +933,23 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
           </div>
         </div>
       </div>
-      {compras.desejado && (
+
+      {compras.desejado && !aberto && (
+        <div className="mt-2 pl-[42px] flex items-center justify-between gap-2">
+          <span className="text-xs text-muted truncate">{resumoQuantidade || 'Sem quantidade definida'}</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
+              className={'flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
+              <Check size={11} /> {compras.comprado ? 'Comprado' : 'Comprei'}
+            </button>
+            <button type="button" onClick={() => setAberto(true)} className="text-muted p-1" aria-label="Editar quantidade">
+              <Pencil size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {compras.desejado && aberto && (
         <div className="mt-2.5 pl-[42px]">
           {variantes.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
@@ -940,10 +994,16 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
 
           <SelectWithQuickAdd label="Comprador" opcional valor={compradorId} onChange={escolherComprador} opcoes={compradores} onCriar={criarComprador} />
 
-          <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
-            className={'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
-            <Check size={13} /> {compras.comprado ? 'Comprado ✓' : 'Comprei'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => salvar({ comprado: !compras.comprado })}
+              className={'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg ' + (compras.comprado ? 'bg-primary text-white' : 'bg-base border border-line text-ink')}>
+              <Check size={13} /> {compras.comprado ? 'Comprado ✓' : 'Comprei'}
+            </button>
+            <button type="button" onClick={() => setAberto(false)}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-ink text-white">
+              <Check size={13} /> Pronto
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1038,7 +1098,7 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
 
   const secoesDisponiveis = useMemo(() => {
     const nomes = new Set(produtos.map((p) => p.secaoNome).filter(Boolean))
-    return [...nomes].sort((a, b) => a.localeCompare(b))
+    return [...nomes].sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }))
   }, [produtos])
 
   const visiveis = produtos
@@ -1270,9 +1330,8 @@ function EditarEntradaModal({ movimentacao, produto, locais, criarLocal, onConfi
   )
 }
 
-function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditarEntrada, secoes, itens, marcas }) {
+function RelatoriosPanel({ movimentacoes, produtos, secoes, itens, marcas }) {
   const [filtro, setFiltro] = useState('todos')
-  const [editando, setEditando] = useState(null)
 
   const produtoPorId = useMemo(() => {
     const mapa = {}
@@ -1332,14 +1391,7 @@ function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditar
             <div key={m.id} className="card card-accent p-3" style={{ '--accent-stripe': estilo.stripe }}>
               <div className="flex items-center justify-between mb-1">
                 <span className={'text-[11px] font-semibold px-2 py-0.5 rounded-full ' + estilo.cor}>{estilo.label}</span>
-                <div className="flex items-center gap-2">
-                  {m.tipo === 'entrada' && (
-                    <button onClick={() => setEditando(m)} className="text-muted hover:text-primary-dark p-0.5" aria-label="Editar entrada">
-                      <Pencil size={13} />
-                    </button>
-                  )}
-                  <span className="text-xs text-muted">{formatarData(m.data)}</span>
-                </div>
+                <span className="text-xs text-muted">{formatarData(m.data)}</span>
               </div>
               <div className="font-medium text-ink">
                 {produto ? `${produto.itemNome} — ${produto.marcaNome}` : 'Item removido'}
@@ -1353,19 +1405,6 @@ function RelatoriosPanel({ movimentacoes, produtos, locais, criarLocal, onEditar
           )
         })}
       </div>
-
-      {editando && (
-        <EditarEntradaModal
-          movimentacao={editando}
-          produto={produtoPorId[editando.produtoId]}
-          locais={locais}
-          criarLocal={criarLocal}
-          onFechar={() => setEditando(null)}
-          onConfirmar={async (dados) => {
-            await onEditarEntrada(editando, dados)
-            setEditando(null)
-          }} />
-      )}
     </div>
   )
 }
@@ -1643,7 +1682,8 @@ export default function App() {
             <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
               onSaida={handleSaida} onTransferencia={handleTransferencia}
               locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
-              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} />
+              secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
+              movimentacoes={movimentacoes} onEditarEntrada={handleEditarEntrada} />
           )}
           {aba === 'compras' && (
             <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras}
@@ -1652,8 +1692,6 @@ export default function App() {
           )}
           {aba === 'relatorios' && (
             <RelatoriosPanel movimentacoes={movimentacoes} produtos={produtos}
-              locais={locaisHook.lista} criarLocal={locaisHook.adicionar}
-              onEditarEntrada={handleEditarEntrada}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista} />
           )}
           {aba === 'ajustes' && (
