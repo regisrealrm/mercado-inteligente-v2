@@ -519,7 +519,7 @@ function FotoThumb({ produto, onEscolherArquivo, onAmpliar, carregando }) {
         aria-label="Adicionar foto">
         {carregando ? <Loader2 size={16} className="animate-spin" /> : <Camera size={18} />}
       </button>
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden"
+      <input ref={inputRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onEscolherArquivo(produto.id, f); e.target.value = '' }} />
     </>
   )
