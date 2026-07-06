@@ -47,6 +47,8 @@ function comprasNormalizadas(compras) {
     linhas: Array.isArray(compras?.linhas) ? compras.linhas : [],
     compradorId: compras?.compradorId || '',
     compradorNome: compras?.compradorNome || '',
+    listaId: compras?.listaId || '',
+    listaNome: compras?.listaNome || '',
     comprado: !!compras?.comprado
   }
 }
@@ -230,13 +232,15 @@ function useProdutos() {
 // COMPONENTES
 // ============================================================
 
-function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar }) {
-  const [criando, setCriando] = useState(false)
-  const [novoNome, setNovoNome] = useState('')
+function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar, onRenomear }) {
+  const [modo, setModo] = useState('normal')
+  const [texto, setTexto] = useState('')
   const [erro, setErro] = useState('')
 
-  async function confirmar() {
-    const nome = novoNome.trim()
+  const itemAtual = opcoes.find((o) => o.id === valor)
+
+  async function confirmarCriar() {
+    const nome = texto.trim()
     if (!nome) return
     const existe = opcoes.some((o) => o.nome.toLowerCase() === nome.toLowerCase())
     if (existe) {
@@ -245,15 +249,42 @@ function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar 
     }
     const id = await onCriar(nome)
     if (id) onChange(id)
-    setNovoNome('')
+    setTexto('')
     setErro('')
-    setCriando(false)
+    setModo('normal')
+  }
+
+  function iniciarRenomear() {
+    if (!itemAtual) return
+    setTexto(itemAtual.nome)
+    setErro('')
+    setModo('renomeando')
+  }
+
+  async function confirmarRenomear() {
+    const nome = texto.trim()
+    if (!nome || !itemAtual) { setModo('normal'); return }
+    const existe = opcoes.some((o) => o.id !== itemAtual.id && o.nome.toLowerCase() === nome.toLowerCase())
+    if (existe) {
+      setErro(`Já existe um(a) ${label.toLowerCase()} com esse nome`)
+      return
+    }
+    await onRenomear(itemAtual.id, nome)
+    setTexto('')
+    setErro('')
+    setModo('normal')
+  }
+
+  function cancelar() {
+    setModo('normal')
+    setTexto('')
+    setErro('')
   }
 
   return (
     <div className="mb-3">
       <label className="text-sm text-muted">{label}{opcional && <span className="text-muted/70"> (opcional)</span>}</label>
-      {!criando ? (
+      {modo === 'normal' && (
         <div className="flex gap-2 mt-1">
           <select
             className="flex-1 px-3 py-2 rounded-xl border border-line bg-base text-ink"
@@ -265,24 +296,33 @@ function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar 
               <option key={op.id} value={op.id}>{op.nome}</option>
             ))}
           </select>
-          <button type="button" onClick={() => setCriando(true)}
+          {onRenomear && itemAtual && (
+            <button type="button" onClick={iniciarRenomear}
+              className="w-11 h-11 shrink-0 rounded-xl bg-base border border-line text-muted flex items-center justify-center"
+              aria-label={`Renomear ${label}`}>
+              <Pencil size={17} />
+            </button>
+          )}
+          <button type="button" onClick={() => setModo('criando')}
             className="w-11 h-11 shrink-0 rounded-xl bg-primary-light text-primary-dark flex items-center justify-center"
             aria-label={`Criar novo ${label}`}>
             <Plus size={20} />
           </button>
         </div>
-      ) : (
+      )}
+      {modo !== 'normal' && (
         <div>
           <div className="flex gap-2 mt-1">
             <input autoFocus
               className={'flex-1 px-3 py-2 rounded-xl border bg-base text-ink ' + (erro ? 'border-danger' : 'border-primary')}
-              value={novoNome} onChange={(e) => { setNovoNome(e.target.value); setErro('') }}
-              placeholder={`Nome d${label.toLowerCase().startsWith('se') ? 'a' : 'o'} novo ${label.toLowerCase()}`}
-              onKeyDown={(e) => e.key === 'Enter' && confirmar()} />
-            <button onClick={confirmar} className="w-11 h-11 shrink-0 rounded-xl bg-primary text-white flex items-center justify-center">
+              value={texto} onChange={(e) => { setTexto(e.target.value); setErro('') }}
+              placeholder={modo === 'criando' ? `Nome d${label.toLowerCase().startsWith('se') ? 'a' : 'o'} novo ${label.toLowerCase()}` : undefined}
+              onKeyDown={(e) => e.key === 'Enter' && (modo === 'criando' ? confirmarCriar() : confirmarRenomear())} />
+            <button onClick={modo === 'criando' ? confirmarCriar : confirmarRenomear}
+              className="w-11 h-11 shrink-0 rounded-xl bg-primary text-white flex items-center justify-center">
               <Check size={18} />
             </button>
-            <button onClick={() => { setCriando(false); setNovoNome(''); setErro('') }}
+            <button onClick={cancelar}
               className="w-11 h-11 shrink-0 rounded-xl bg-line text-ink flex items-center justify-center">
               <X size={18} />
             </button>
@@ -467,7 +507,7 @@ function FotoAmpliadaModal({ produto, onFechar, onTrocarFoto, onRemoverFoto, car
   )
 }
 
-function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, onConfirmar, onFechar }) {
+function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, renomearSecao, renomearItem, renomearMarca, onConfirmar, onFechar }) {
   const [secaoId, setSecaoId] = useState(produto.secaoId || '')
   const [itemId, setItemId] = useState(produto.itemId || '')
   const [marcaId, setMarcaId] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaId || ''))
@@ -507,9 +547,9 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
         <h2 className="text-lg font-semibold mb-1">Editar cadastro</h2>
         <p className="text-sm text-muted mb-4">{produto.itemNome} — {produto.marcaNome}</p>
 
-        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} />
-        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} />
-        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} />
+        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} onRenomear={renomearSecao} />
+        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} onRenomear={renomearItem} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} onRenomear={renomearMarca} />
 
         <div className="mb-4">
           <label className="text-sm text-muted block mb-1">Pesos conhecidos</label>
@@ -582,7 +622,7 @@ function ConfirmarExclusaoModal({ produto, onConfirmar, onFechar }) {
   )
 }
 
-function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, onEditarProduto, onExcluirProduto, onSalvarEntrada, onAbrirEditarCategorias }) {
+function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, renomearSecao, renomearItem, renomearMarca, onEditarProduto, onExcluirProduto, onSalvarEntrada, onAbrirEditarCategorias, onAtualizarCompras, compradores, criarComprador, listas, criarLista }) {
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -595,8 +635,17 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
   const [editandoProduto, setEditandoProduto] = useState(null)
   const [excluindoProduto, setExcluindoProduto] = useState(null)
   const [mostrandoEntrada, setMostrandoEntrada] = useState(false)
+  const [adicionandoCompra, setAdicionandoCompra] = useState(null)
 
   const produtoAmpliado = produtos.find((p) => p.id === fotoAmpliadaId) || null
+
+  async function handleAdicionarACompras(produto) {
+    const compras = comprasNormalizadas(produto.compras)
+    if (!compras.desejado) {
+      await onAtualizarCompras(produto.id, { ...compras, desejado: true })
+    }
+    setAdicionandoCompra({ ...produto, compras: { ...compras, desejado: true } })
+  }
 
   async function handleEditarProduto(produtoId, dados) {
     const secao = secoes.find((s) => s.id === dados.secaoId)
@@ -658,6 +707,11 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
                   className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
                   <Pencil size={12} />
                 </button>
+                <button onClick={() => handleAdicionarACompras(p)}
+                  title="Adicionar à lista de compras" aria-label="Adicionar à lista de compras"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-accent-light text-accent-dark">
+                  <ShoppingCart size={12} />
+                </button>
                 <button onClick={() => setExcluindoProduto(p)}
                   title="Excluir produto" aria-label="Excluir produto"
                   className="flex items-center justify-center w-7 h-7 rounded-lg bg-danger-light text-danger">
@@ -678,11 +732,21 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
           produto={editandoProduto}
           secoes={secoes} itens={itens} marcas={marcas}
           criarSecao={criarSecao} criarItem={criarItem} criarMarca={criarMarca}
+          renomearSecao={renomearSecao} renomearItem={renomearItem} renomearMarca={renomearMarca}
           onFechar={() => setEditandoProduto(null)}
           onConfirmar={async (dados) => {
             await handleEditarProduto(editandoProduto.id, dados)
             setEditandoProduto(null)
           }} />
+      )}
+
+      {adicionandoCompra && (
+        <AdicionarACompraModal
+          produto={adicionandoCompra}
+          onAtualizar={onAtualizarCompras}
+          compradores={compradores} criarComprador={criarComprador}
+          listas={listas} criarLista={criarLista}
+          onFechar={() => setAdicionandoCompra(null)} />
       )}
 
       {excluindoProduto && (
@@ -711,7 +775,7 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
 let chaveCompra = 1
 const novaChaveCompra = () => String(chaveCompra++)
 
-function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarComprador }) {
+function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarComprador, listas, criarLista, iniciarAberto }) {
   const compras = comprasNormalizadas(produto.compras)
   const [linhas, setLinhas] = useState(() =>
     compras.linhas.length > 0
@@ -719,7 +783,8 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
       : [{ key: novaChaveCompra(), peso: '', unidadePeso: 'kg', unidades: '' }]
   )
   const [compradorId, setCompradorId] = useState(() => compradores.find((c) => c.nome === compras.compradorNome)?.id || '')
-  const [aberto, setAberto] = useState(false)
+  const [listaId, setListaId] = useState(() => listas.find((l) => l.nome === compras.listaNome)?.id || '')
+  const [aberto, setAberto] = useState(!!iniciarAberto)
   const variantes = produto.pesosConhecidos || []
 
   function salvar(patch) {
@@ -728,6 +793,8 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
       desejado: patch.desejado ?? compras.desejado,
       compradorId: patch.compradorId ?? compras.compradorId,
       compradorNome: patch.compradorNome ?? compras.compradorNome,
+      listaId: patch.listaId ?? compras.listaId,
+      listaNome: patch.listaNome ?? compras.listaNome,
       comprado: patch.comprado ?? compras.comprado,
       linhas: linhasFonte
         .map((l) => ({
@@ -780,6 +847,12 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
     salvar({ compradorId: id, compradorNome: comprador?.nome || '' })
   }
 
+  function escolherLista(id) {
+    setListaId(id)
+    const lista = listas.find((l) => l.id === id)
+    salvar({ listaId: id, listaNome: lista?.nome || '' })
+  }
+
   const resumoQuantidade = linhasQuantidadeFormatadas(compras.linhas).join(' · ')
 
   return (
@@ -802,6 +875,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
           </div>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
             <span className="tag-feira text-accent-dark">{produto.secaoNome}</span>
+            {compras.listaNome && <span className="text-[10px] text-primary-dark font-medium">📋 {compras.listaNome}</span>}
             {compras.compradorNome && <span className="text-[10px] text-muted">👤 {compras.compradorNome}</span>}
           </div>
         </div>
@@ -865,6 +939,7 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
             <Plus size={12} /> Adicionar peso
           </button>
 
+          <SelectWithQuickAdd label="Lista" opcional valor={listaId} onChange={escolherLista} opcoes={listas} onCriar={criarLista} />
           <SelectWithQuickAdd label="Comprador" opcional valor={compradorId} onChange={escolherComprador} opcoes={compradores} onCriar={criarComprador} />
 
           <div className="flex items-center gap-2">
@@ -879,6 +954,24 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function AdicionarACompraModal({ produto, onAtualizar, compradores, criarComprador, listas, criarLista, onFechar }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Adicionar à lista de compras</h2>
+          <button onClick={onFechar} className="text-muted p-1" aria-label="Fechar"><X size={20} /></button>
+        </div>
+        <LinhaProduto produto={produto} onAtualizar={onAtualizar}
+          compradores={compradores} criarComprador={criarComprador}
+          listas={listas} criarLista={criarLista}
+          onAmpliarFoto={() => {}} iniciarAberto />
+      </div>
     </div>
   )
 }
@@ -952,17 +1045,21 @@ async function compartilharOuBaixarPdf(doc, nomeArquivo, textoWhats) {
   window.open('https://wa.me/?text=' + encodeURIComponent(textoWhats), '_blank', 'noopener,noreferrer')
 }
 
-function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, itens, marcas, compradoresHook }) {
+function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, itens, marcas, compradoresHook, listasHook }) {
   const compradores = compradoresHook.lista
   const criarComprador = compradoresHook.adicionar
+  const listas = listasHook.lista
+  const criarLista = listasHook.adicionar
   const [filtro, setFiltro] = useState('todos')
   const [filtroSecao, setFiltroSecao] = useState('todas')
   const [filtroComprador, setFiltroComprador] = useState('todos')
+  const [filtroLista, setFiltroLista] = useState('todas')
   const [fotoAmpliadaId, setFotoAmpliadaId] = useState(null)
   const [gerenciandoCompradores, setGerenciandoCompradores] = useState(false)
+  const [gerenciandoListas, setGerenciandoListas] = useState(false)
 
   // Sempre resolve o nome atual da seção/item/marca pelo id, em vez do texto
-  // que ficou salvo na hora da entrada — assim renomear em Ajustes reflete aqui.
+  // que ficou salvo na hora da entrada — assim renomear reflete aqui.
   const produtos = useMemo(() => produtosBrutos.map((p) => ({
     ...p,
     itemNome: nomeAtual(itens, p.itemId, p.itemNome),
@@ -977,19 +1074,32 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
     return [...nomes].sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }))
   }, [produtos])
 
+  function combinaComprador(compras) {
+    if (filtroComprador === 'todos') return true
+    if (filtroComprador === 'sem') return !compras.compradorNome
+    return compras.compradorNome === filtroComprador
+  }
+
+  function combinaLista(compras) {
+    if (filtroLista === 'todas') return true
+    if (filtroLista === 'sem') return !compras.listaNome
+    return compras.listaNome === filtroLista
+  }
+
   const visiveis = produtos
     .filter((p) => (filtro === 'selecionados' ? comprasNormalizadas(p.compras).desejado : true))
     .filter((p) => (filtroSecao === 'todas' ? true : p.secaoNome === filtroSecao))
-    .filter((p) => {
-      if (filtroComprador === 'todos') return true
-      const nomeComprador = comprasNormalizadas(p.compras).compradorNome
-      if (filtroComprador === 'sem') return !nomeComprador
-      return nomeComprador === filtroComprador
-    })
+    .filter((p) => combinaComprador(comprasNormalizadas(p.compras)))
+    .filter((p) => (filtro === 'selecionados' ? combinaLista(comprasNormalizadas(p.compras)) : true))
 
+  // Reflete exatamente o que os filtros atuais mostrariam de itens marcados —
+  // é o que vai pro Imprimir/WhatsApp, então filtrar por Lista manda só aquela lista.
   const selecionados = produtos
     .map((p) => ({ produto: p, compras: comprasNormalizadas(p.compras) }))
     .filter((x) => x.compras.desejado)
+    .filter((x) => filtroSecao === 'todas' || x.produto.secaoNome === filtroSecao)
+    .filter((x) => combinaComprador(x.compras))
+    .filter((x) => combinaLista(x.compras))
   const totalSel = selecionados.length
 
   function handleImprimir() {
@@ -1003,14 +1113,28 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
     await compartilharOuBaixarPdf(doc, 'lista-de-compras.pdf', gerarTextoWhatsApp(selecionados))
   }
 
+  async function handleEsvaziarCarrinho() {
+    await Promise.all(
+      selecionados.map(({ produto }) =>
+        onAtualizar(produto.id, { desejado: false, comprado: false, compradorId: '', compradorNome: '', listaId: '', listaNome: '', linhas: [] })
+      )
+    )
+  }
+
   return (
     <div className="px-4 pt-4 pb-28">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 gap-2">
         <h2 className="text-lg font-display font-semibold text-ink md:hidden">Lista de compras</h2>
         {totalSel > 0 && (
-          <span className="text-xs bg-primary-light text-primary-dark px-2 py-1 rounded-full font-medium">
-            {totalSel} selecionado{totalSel > 1 ? 's' : ''}
-          </span>
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-xs bg-primary-light text-primary-dark px-2 py-1 rounded-full font-medium whitespace-nowrap">
+              {totalSel} selecionado{totalSel > 1 ? 's' : ''}
+            </span>
+            <button onClick={handleEsvaziarCarrinho}
+              className="text-xs font-medium text-danger px-2 py-1 rounded-lg bg-danger-light whitespace-nowrap">
+              Esvaziar lista
+            </button>
+          </div>
         )}
       </div>
 
@@ -1035,7 +1159,37 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
             ))}
           </select>
         )}
-        {compradores.length > 0 && (
+
+        {listas.length > 0 ? (
+          <div className="flex gap-2">
+            <select value={filtroLista} onChange={(e) => setFiltroLista(e.target.value)}
+              className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
+              <option value="todas">Todas as listas</option>
+              <option value="sem">Sem lista</option>
+              {listas.map((l) => (
+                <option key={l.id} value={l.nome}>{l.nome}</option>
+              ))}
+            </select>
+            <button onClick={() => setGerenciandoListas(true)}
+              className="w-10 h-10 shrink-0 rounded-xl bg-primary-light text-primary-dark flex items-center justify-center" aria-label="Adicionar lista">
+              <Plus size={18} />
+            </button>
+            <button onClick={() => setGerenciandoListas(true)}
+              className="w-10 h-10 shrink-0 rounded-xl bg-base border border-line text-muted flex items-center justify-center" aria-label="Editar listas">
+              <Pencil size={16} />
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => setGerenciandoListas(true)}
+            className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary-light text-primary-dark self-start">
+            <Plus size={16} /> Cadastrar lista
+          </button>
+        )}
+        {filtroLista !== 'todas' && filtro !== 'selecionados' && (
+          <p className="text-[11px] text-muted -mt-1">O filtro de lista só se aplica na aba "Selecionados".</p>
+        )}
+
+        {compradores.length > 0 ? (
           <div className="flex gap-2">
             <select value={filtroComprador} onChange={(e) => setFiltroComprador(e.target.value)}
               className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-line bg-surface text-sm text-ink">
@@ -1054,8 +1208,7 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
               <Pencil size={16} />
             </button>
           </div>
-        )}
-        {compradores.length === 0 && (
+        ) : (
           <button onClick={() => setGerenciandoCompradores(true)}
             className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary-light text-primary-dark self-start">
             <Plus size={16} /> Cadastrar comprador
@@ -1076,7 +1229,8 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
             </button>
           </div>
           <p className="text-[11px] text-muted mt-1.5 text-center">
-            "Imprimir" abre o relatório pronto pra impressora. No celular, "Enviar no WhatsApp" já anexa o PDF direto; se o aparelho não suportar, ele baixa o PDF e abre o WhatsApp pra anexar na conversa.
+            {filtroLista !== 'todas' ? `Só a lista "${filtroLista === 'sem' ? 'sem lista' : filtroLista}" será impressa/enviada. ` : ''}
+            No celular, "Enviar no WhatsApp" já anexa o PDF direto; se o aparelho não suportar, ele baixa o PDF e abre o WhatsApp pra anexar na conversa.
           </p>
         </div>
       )}
@@ -1084,10 +1238,10 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
       {visiveis.length === 0 && (
         <div className="card p-6 text-center">
           <p className="text-ink font-medium mb-1">
-            {filtroSecao !== 'todas' || filtroComprador !== 'todos' ? 'Nada com esse filtro' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Nada com esse filtro' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
           </p>
           <p className="text-sm text-muted">
-            {filtroSecao !== 'todas' || filtroComprador !== 'todos' ? 'Tenta ajustar os filtros pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Tenta ajustar os filtros pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
           </p>
         </div>
       )}
@@ -1095,7 +1249,8 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
         {visiveis.map((p) => (
           <LinhaProduto key={p.id} produto={p} onAtualizar={onAtualizar}
             onAmpliarFoto={() => setFotoAmpliadaId(p.id)}
-            compradores={compradores} criarComprador={criarComprador} />
+            compradores={compradores} criarComprador={criarComprador}
+            listas={listas} criarLista={criarLista} />
         ))}
       </div>
 
@@ -1103,6 +1258,9 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
 
       {gerenciandoCompradores && (
         <EditarCompradoresModal compradoresHook={compradoresHook} onFechar={() => setGerenciandoCompradores(false)} />
+      )}
+      {gerenciandoListas && (
+        <EditarListasModal listasHook={listasHook} onFechar={() => setGerenciandoListas(false)} />
       )}
     </div>
   )
@@ -1202,6 +1360,19 @@ function EditarCompradoresModal({ compradoresHook, onFechar }) {
   )
 }
 
+function EditarListasModal({ listasHook, onFechar }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-end justify-center z-50" onClick={onFechar}>
+      <div className="bg-surface w-full max-w-md rounded-t-2xl p-4 pb-6 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-line rounded-full mx-auto mb-4" />
+        <h2 className="text-lg font-semibold mb-3">Editar listas</h2>
+        <ListaEditavelInline titulo="Lista" placeholder="nome da lista (ex: Frutas, Pet)" lista={listasHook.lista} adicionar={listasHook.adicionar} renomear={listasHook.renomear} remover={listasHook.remover} />
+        <button onClick={onFechar} className="btn-secondary w-full">Fechar</button>
+      </div>
+    </div>
+  )
+}
+
 const ABAS_NAV = [
   { id: 'estoque', label: 'Produtos', Icon: Package },
   { id: 'compras', label: 'Compras', Icon: ShoppingCart }
@@ -1259,6 +1430,7 @@ export default function App() {
   const itensHook = useMasterList('itens')
   const marcasHook = useMasterList('marcas')
   const compradoresHook = useMasterList('compradores')
+  const listasHook = useMasterList('listas')
   const {
     produtos, loading,
     cadastrarProduto, atualizarCompras, salvarFoto, removerFoto, removerProduto, atualizarCadastro
@@ -1318,15 +1490,19 @@ export default function App() {
             <EstoquePanel produtos={produtos} onFoto={salvarFoto} onRemoverFoto={removerFoto}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
               criarSecao={secoesHook.adicionar} criarItem={itensHook.adicionar} criarMarca={marcasHook.adicionar}
+              renomearSecao={secoesHook.renomear} renomearItem={itensHook.renomear} renomearMarca={marcasHook.renomear}
               onEditarProduto={atualizarCadastro}
               onExcluirProduto={handleExcluirProduto}
               onSalvarEntrada={handleSalvarEntrada}
-              onAbrirEditarCategorias={() => setEditandoCategorias(true)} />
+              onAbrirEditarCategorias={() => setEditandoCategorias(true)}
+              onAtualizarCompras={atualizarCompras}
+              compradores={compradoresHook.lista} criarComprador={compradoresHook.adicionar}
+              listas={listasHook.lista} criarLista={listasHook.adicionar} />
           )}
           {aba === 'compras' && (
             <ListaComprasPanel produtos={produtos} onAtualizar={atualizarCompras}
               secoes={secoesHook.lista} itens={itensHook.lista} marcas={marcasHook.lista}
-              compradoresHook={compradoresHook} />
+              compradoresHook={compradoresHook} listasHook={listasHook} />
           )}
         </div>
       </div>
