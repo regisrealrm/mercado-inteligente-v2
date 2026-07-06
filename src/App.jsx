@@ -702,15 +702,15 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
                 <span className="tag-feira text-primary-dark mt-1">{p.secaoNome}</span>
               </div>
               <div className="flex gap-1.5 shrink-0">
-                <button onClick={() => setEditandoProduto(p)}
-                  title="Editar cadastro" aria-label="Editar cadastro"
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
-                  <Pencil size={12} />
-                </button>
                 <button onClick={() => handleAdicionarACompras(p)}
                   title="Adicionar à lista de compras" aria-label="Adicionar à lista de compras"
                   className="flex items-center justify-center w-7 h-7 rounded-lg bg-accent-light text-accent-dark">
                   <ShoppingCart size={12} />
+                </button>
+                <button onClick={() => setEditandoProduto(p)}
+                  title="Editar cadastro" aria-label="Editar cadastro"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-base border border-line text-muted">
+                  <Pencil size={12} />
                 </button>
                 <button onClick={() => setExcluindoProduto(p)}
                   title="Excluir produto" aria-label="Excluir produto"
@@ -1050,7 +1050,6 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
   const criarComprador = compradoresHook.adicionar
   const listas = listasHook.lista
   const criarLista = listasHook.adicionar
-  const [filtro, setFiltro] = useState('todos')
   const [filtroSecao, setFiltroSecao] = useState('todas')
   const [filtroComprador, setFiltroComprador] = useState('todos')
   const [filtroLista, setFiltroLista] = useState('todas')
@@ -1087,10 +1086,10 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
   }
 
   const visiveis = produtos
-    .filter((p) => (filtro === 'selecionados' ? comprasNormalizadas(p.compras).desejado : true))
+    .filter((p) => comprasNormalizadas(p.compras).desejado)
     .filter((p) => (filtroSecao === 'todas' ? true : p.secaoNome === filtroSecao))
     .filter((p) => combinaComprador(comprasNormalizadas(p.compras)))
-    .filter((p) => (filtro === 'selecionados' ? combinaLista(comprasNormalizadas(p.compras)) : true))
+    .filter((p) => combinaLista(comprasNormalizadas(p.compras)))
 
   // Reflete exatamente o que os filtros atuais mostrariam de itens marcados —
   // é o que vai pro Imprimir/WhatsApp, então filtrar por Lista manda só aquela lista.
@@ -1138,17 +1137,6 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
         )}
       </div>
 
-      <div className="flex gap-2 mb-3">
-        <button onClick={() => setFiltro('todos')}
-          className={'chip ' + (filtro === 'todos' ? 'bg-primary text-white border-primary' : 'bg-surface text-muted border-line')}>
-          Todos os produtos
-        </button>
-        <button onClick={() => setFiltro('selecionados')}
-          className={'chip ' + (filtro === 'selecionados' ? 'bg-primary text-white border-primary' : 'bg-surface text-muted border-line')}>
-          Selecionados
-        </button>
-      </div>
-
       <div className="flex flex-col gap-2 mb-4">
         {secoesDisponiveis.length > 0 && (
           <select value={filtroSecao} onChange={(e) => setFiltroSecao(e.target.value)}
@@ -1184,9 +1172,6 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
             className="flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-xl bg-primary-light text-primary-dark self-start">
             <Plus size={16} /> Cadastrar lista
           </button>
-        )}
-        {filtroLista !== 'todas' && filtro !== 'selecionados' && (
-          <p className="text-[11px] text-muted -mt-1">O filtro de lista só se aplica na aba "Selecionados".</p>
         )}
 
         {compradores.length > 0 ? (
@@ -1238,10 +1223,10 @@ function ListaComprasPanel({ produtos: produtosBrutos, onAtualizar, secoes, iten
       {visiveis.length === 0 && (
         <div className="card p-6 text-center">
           <p className="text-ink font-medium mb-1">
-            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Nada com esse filtro' : filtro === 'selecionados' ? 'Nada selecionado ainda' : 'Nenhum produto cadastrado ainda'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Nada com esse filtro' : 'Nada marcado pra comprar ainda'}
           </p>
           <p className="text-sm text-muted">
-            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Tenta ajustar os filtros pra ver os outros produtos.' : filtro === 'selecionados' ? 'Marque a caixinha de um produto pra colocar na lista.' : 'Produtos aparecem aqui automaticamente após a primeira entrada.'}
+            {filtroSecao !== 'todas' || filtroComprador !== 'todos' || filtroLista !== 'todas' ? 'Tenta ajustar os filtros pra ver os outros itens.' : 'Vá em "Produtos" e toque no carrinho de um item pra colocar aqui.'}
           </p>
         </div>
       )}
