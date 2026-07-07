@@ -248,7 +248,7 @@ function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar,
       return
     }
     const id = await onCriar(nome)
-    if (id) onChange(id)
+    if (id) onChange(id, nome)
     setTexto('')
     setErro('')
     setModo('normal')
@@ -289,7 +289,11 @@ function SelectWithQuickAdd({ label, opcional, valor, onChange, opcoes, onCriar,
           <select
             className="flex-1 px-3 py-2 rounded-xl border border-line bg-base text-ink"
             value={valor}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              const idSel = e.target.value
+              const opcaoSel = opcoes.find((o) => o.id === idSel)
+              onChange(idSel, opcaoSel?.nome || '')
+            }}
           >
             <option value="">Selecione...</option>
             {opcoes.map((op) => (
@@ -340,8 +344,11 @@ const linhaVazia = () => ({ key: novaChaveLinha(), peso: '', unidadePeso: 'kg' }
 
 function EntradaForm({ secoesHook, itensHook, marcasHook, onSalvar, onAbrirEditarCategorias }) {
   const [secaoId, setSecaoId] = useState('')
+  const [secaoNome, setSecaoNome] = useState('')
   const [itemId, setItemId] = useState('')
+  const [itemNome, setItemNome] = useState('')
   const [marcaId, setMarcaId] = useState('')
+  const [marcaNome, setMarcaNome] = useState('')
   const [linhas, setLinhas] = useState([linhaVazia()])
   const [salvando, setSalvando] = useState(false)
   const [sucesso, setSucesso] = useState(false)
@@ -359,10 +366,13 @@ function EntradaForm({ secoesHook, itensHook, marcasHook, onSalvar, onAbrirEdita
       const todasLinhas = linhas
         .map((l) => ({ peso: l.peso === '' ? 0 : Number(l.peso), unidadePeso: l.unidadePeso }))
         .filter((l) => l.peso > 0)
-      await onSalvar({ secaoId, itemId, marcaId, todasLinhas })
+      await onSalvar({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, todasLinhas })
       setSecaoId('')
+      setSecaoNome('')
       setItemId('')
+      setItemNome('')
       setMarcaId('')
+      setMarcaNome('')
       setLinhas([linhaVazia()])
       setSucesso(true)
       setTimeout(() => setSucesso(false), 1600)
@@ -382,9 +392,9 @@ function EntradaForm({ secoesHook, itensHook, marcasHook, onSalvar, onAbrirEdita
           </button>
         </div>
 
-        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoesHook.lista} onCriar={secoesHook.adicionar} />
-        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itensHook.lista} onCriar={itensHook.adicionar} />
-        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcasHook.lista} onCriar={marcasHook.adicionar} />
+        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={(id, nome) => { setSecaoId(id); setSecaoNome(nome) }} opcoes={secoesHook.lista} onCriar={secoesHook.adicionar} />
+        <SelectWithQuickAdd label="Item" valor={itemId} onChange={(id, nome) => { setItemId(id); setItemNome(nome) }} opcoes={itensHook.lista} onCriar={itensHook.adicionar} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={(id, nome) => { setMarcaId(id); setMarcaNome(nome) }} opcoes={marcasHook.lista} onCriar={marcasHook.adicionar} />
 
         <div className="mb-1 flex items-center justify-between">
           <label className="text-sm text-muted">Pesos (opcional)</label>
@@ -509,8 +519,11 @@ function FotoAmpliadaModal({ produto, onFechar, onTrocarFoto, onRemoverFoto, car
 
 function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarItem, criarMarca, renomearSecao, renomearItem, renomearMarca, onConfirmar, onFechar }) {
   const [secaoId, setSecaoId] = useState(produto.secaoId || '')
+  const [secaoNome, setSecaoNome] = useState(produto.secaoNome || '')
   const [itemId, setItemId] = useState(produto.itemId || '')
+  const [itemNome, setItemNome] = useState(produto.itemNome || '')
   const [marcaId, setMarcaId] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaId || ''))
+  const [marcaNome, setMarcaNome] = useState(produto.marcaId === 'sem-marca' ? '' : (produto.marcaNome || ''))
   const [pesos, setPesos] = useState(produto.pesosConhecidos || [])
   const [novoPeso, setNovoPeso] = useState('')
   const [novaUnidadePeso, setNovaUnidadePeso] = useState('kg')
@@ -534,7 +547,7 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
     if (!secaoId || !itemId || salvando) return
     setSalvando(true)
     try {
-      await onConfirmar({ secaoId, itemId, marcaId, pesosConhecidos: pesos })
+      await onConfirmar({ secaoId, secaoNome, itemId, itemNome, marcaId, marcaNome, pesosConhecidos: pesos })
     } finally {
       setSalvando(false)
     }
@@ -547,9 +560,9 @@ function EditarProdutoModal({ produto, secoes, itens, marcas, criarSecao, criarI
         <h2 className="text-lg font-semibold mb-1">Editar cadastro</h2>
         <p className="text-sm text-muted mb-4">{produto.itemNome} — {produto.marcaNome}</p>
 
-        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={setSecaoId} opcoes={secoes} onCriar={criarSecao} onRenomear={renomearSecao} />
-        <SelectWithQuickAdd label="Item" valor={itemId} onChange={setItemId} opcoes={itens} onCriar={criarItem} onRenomear={renomearItem} />
-        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={setMarcaId} opcoes={marcas} onCriar={criarMarca} onRenomear={renomearMarca} />
+        <SelectWithQuickAdd label="Seção" valor={secaoId} onChange={(id, nome) => { setSecaoId(id); setSecaoNome(nome) }} opcoes={secoes} onCriar={criarSecao} onRenomear={renomearSecao} />
+        <SelectWithQuickAdd label="Item" valor={itemId} onChange={(id, nome) => { setItemId(id); setItemNome(nome) }} opcoes={itens} onCriar={criarItem} onRenomear={renomearItem} />
+        <SelectWithQuickAdd label="Marca" opcional valor={marcaId} onChange={(id, nome) => { setMarcaId(id); setMarcaNome(nome) }} opcoes={marcas} onCriar={criarMarca} onRenomear={renomearMarca} />
 
         <div className="mb-4">
           <label className="text-sm text-muted block mb-1">Pesos conhecidos</label>
@@ -648,13 +661,10 @@ function EstoquePanel({ produtos: produtosBrutos, onFoto, onRemoverFoto, secoes,
   }
 
   async function handleEditarProduto(produtoId, dados) {
-    const secao = secoes.find((s) => s.id === dados.secaoId)
-    const item = itens.find((i) => i.id === dados.itemId)
-    const marca = marcas.find((m) => m.id === dados.marcaId)
     await onEditarProduto(produtoId, {
-      secaoId: dados.secaoId, secaoNome: secao?.nome || '',
-      itemId: dados.itemId, itemNome: item?.nome || '',
-      marcaId: dados.marcaId || 'sem-marca', marcaNome: marca?.nome || 'Sem marca',
+      secaoId: dados.secaoId, secaoNome: dados.secaoNome || '',
+      itemId: dados.itemId, itemNome: dados.itemNome || '',
+      marcaId: dados.marcaId || 'sem-marca', marcaNome: dados.marcaId ? (dados.marcaNome || '') : 'Sem marca',
       pesosConhecidos: dados.pesosConhecidos
     })
   }
@@ -841,16 +851,14 @@ function LinhaProduto({ produto, onAtualizar, onAmpliarFoto, compradores, criarC
     })
   }
 
-  function escolherComprador(id) {
+  function escolherComprador(id, nome) {
     setCompradorId(id)
-    const comprador = compradores.find((c) => c.id === id)
-    salvar({ compradorId: id, compradorNome: comprador?.nome || '' })
+    salvar({ compradorId: id, compradorNome: id ? nome : '' })
   }
 
-  function escolherLista(id) {
+  function escolherLista(id, nome) {
     setListaId(id)
-    const lista = listas.find((l) => l.id === id)
-    salvar({ listaId: id, listaNome: lista?.nome || '' })
+    salvar({ listaId: id, listaNome: id ? nome : '' })
   }
 
   const resumoQuantidade = linhasQuantidadeFormatadas(compras.linhas).join(' · ')
@@ -1422,15 +1430,12 @@ export default function App() {
   } = useProdutos()
 
   async function handleSalvarEntrada(dados) {
-    const secao = secoesHook.lista.find((s) => s.id === dados.secaoId)
-    const item = itensHook.lista.find((i) => i.id === dados.itemId)
-    const marca = marcasHook.lista.find((m) => m.id === dados.marcaId)
     const marcaIdUsado = dados.marcaId || 'sem-marca'
-    const marcaNomeUsado = marca?.nome || 'Sem marca'
+    const marcaNomeUsado = dados.marcaNome || 'Sem marca'
 
     await cadastrarProduto({
-      secaoId: dados.secaoId, secaoNome: secao?.nome || '',
-      itemId: dados.itemId, itemNome: item?.nome || '',
+      secaoId: dados.secaoId, secaoNome: dados.secaoNome || '',
+      itemId: dados.itemId, itemNome: dados.itemNome || '',
       marcaId: marcaIdUsado, marcaNome: marcaNomeUsado,
       todasLinhas: dados.todasLinhas
     })
